@@ -5,72 +5,223 @@ Main structure of STL
 Tentative proposal by EA 
 """
 
-import torch
 import numpy as np
-from .WaveletTransform import stl_data, Wavelet_Operator
-from .ST_Statistics import ST_Statistics
+from StlData import StlData
+from WaveletTransform import Wavelet_Operator
+from ST_Statistics import ST_Statistics
+import bk # from_numpy, zeros, dim, shape, nan
                     
 ###############################################################################
 ###############################################################################
 
 class ST_Operator:
     '''
-    Class whose instances correspond to an operator to perform scattering transforms.
+    Class whose instances correspond to scattering transforms operators.
     The operator is built through __init__ method.
     The operator is applied through apply method.
-    This operator is DT-independent, and call sub-functions which have a common 
+    This operator is DT-independent, and call sub-functions with common 
     I/O structure, which in turn rely on DT-dependent backend.
+    
+    When the ST operator is applied to some data, it creates an instance of the 
+    ST statistics where all necessary parameters are passed such that the ST 
+    operator that was used in the computation can be reconstructed from it if 
+    necessary.
+    
+    To allow that, a default setting for all parameters used for the apply
+    method can be stored in the ST operator. 
+    
+    A prescription is also given on the order of which the different 
+    normalizations/compression can be done:
+        norm -> iso -> angular_ft -> scale_ft -> flatten (mask_st)
+    Not every transform can be used, but the ordering should be respected.
+    For instance:
+        vanilla -> norm -> angular_ft -> flatten (mask_st)
+        vanilla -> iso -> scale_ft 
+    This allow the operators to be defined in a unique way from these 
+    parameters.    
+        
+    Mask can be stored in the operator. 
     
     Parameters
     ----------
+    # Data and Wavelet Transform
     - DT : str
         Type of data (1d, 2d planar, HealPix, 3d)
-    - N : tuple
-        size of the data (can be multiple dimensions)
+    - N0 : tuple
+        initial size of array (can be multiple dimensions)
     - J : int
         number of scales
     - L : int
         number of orientations
     - WType : str
         type of wavelets
-    - SC : str ("ScatCov", "WPH")
-        type of scattering coefficients to be computed
+        
+    # Scattering Transform
+    - SC : str 
+        type of ST coefficients ("ScatCov", "WPH")
+    - jmin : int
+        minimum scale for ST statistics computation
+    - jmax : int
+        maximum scale for ST statistics computation
+    - dj : int
+        maximum scale difference for ST statistics computation
+    - pbc : bool
+        periodic boundary conditions
+    - mask_MR : StlData with MR=True or None
+        Multi-resolution masks, requires list_dg = range(dg_max + 1)
+        
+    # Additional transform/compression
+    - norm : str
+        type of norm ("S2", "S2_ref")
+    - S2_ref : array
+        array of reference S2 coefficients
+    - iso : bool
+        keep only isotropic coefficients
+    - angular_ft : bool
+        perform angular fourier transform on the ST statistics
+    - scale_ft : bool
+        perform scale cosine transform on the ST statistics
+    - flatten : bool
+        only return a 1D-array and not a ST_Statistics instance
+    - mask_st : list of position
+        mask to be applied when flatten ST statistics
     
     Attributes 
     ----------
-    - parent parameters (DT,N,J,L,WType,SC)
+    - parent parameters (see above)
     - wavelet_op : Wavelet_Transform class
-        Operator for Wavelet Transform
-        Also contain the sub-sampling method
+        Wavelet Transform operator
     
-    Questions and to do
-    ----------
     '''
 
     ########################################
-    def __init__(self, DT, N, J=None, L=None, WType=None, SC="ScatCov"):
+    def __init__(self, 
+                 DT, N0, J=None, L=None, WType=None,
+                 SC="scat_cov", jmin=None, jmax=None, dj=None,
+                 pbc=True, mask=None, 
+                 norm="S2", S2_ref=None, iso=False, 
+                 angular_ft=False, scale_ft=False,
+                 flatten=False, mask_st=None):
         '''
         Constructor, see details above.
+        
+        The mask parameter either expect:
+            - a MR=False mask at dg=0, then converted to the mask_MR format.
+            - a MR=True mask_MR with list_dg = range(dg_max + 1)
         '''
         # Main parameters
         self.DT = DT
-        self.N = N
-        self.wavelet_op = Wavelet_Operator(DT, N, J, L, WType)
+        self.N0 = N0
         
-        # Set J, L, WType to standard values if None
+        # Wavelet transform and related parameters
+        self.wavelet_op = Wavelet_Operator(DT, N0, J, L, WType)
         self.J = self.wavelet_op.J
         self.L = self.wavelet_op.L
         self.WType = self.wavelet_op.WType
         
+        # Scattering transform related parameters
+        self.SC = SC
+        self.jmin = jmin
+        self.jmax = jmax
+        self.dj = dj
+        self.pbc = pbc
+        
+        # Additional transform/compression related parameters
+        self.norm = norm
+        self.S2_ref = S2_ref
+        self.iso = iso
+        self.angular_ft = angular_ft
+        self.scale_ft = scale_ft
+        self.flatten = flatten
+        self.mask_st = mask_st
+        
+        # Check mask coherence and construct MR mask if necessary
+        if mask is not None:
+            if not self.wavelet_op.mask_opt:
+              raise Exception(
+                  "Wavelet transform with masks not supported for this DT") 
+            if not isinstance(mask, StlData):
+                raise Exception("Mask should be a StlData instance") 
+            if self.DT != mask.DT:
+                raise Exception(
+                    "Mask and wavelet transform should have same DT")
+            if self.N0 != mask.N0:
+                raise Exception(
+                    "Mask and wavelet transform should have same N0")        
+            if mask.Fourier:
+                raise Exception("Mask should be in real space") 
+            if not mask.MR:
+                self.mask_MR = mask.downsample_toMR_Mask(
+                    self.wavelet_op.dg_max)
+            else:
+                if mask.list_dg != list(range(self.wavelet_op.dg_max+1)):
+                    raise Exception(
+                    "Mask should be between MR between dg=0 and dg_max") 
+                self.mask_MR = mask
+        
     ########################################
-    def apply(self, data, jmin=None, jmax=None, dj=None, \
-                  pbc=True, mask=None): # + submethods options.
+    @classmethod
+    def from_ST_Statistics(self, st_stat, N0_new=None):
         '''
-        Compute the Scattering Transform (ST) from the stl_data data.
-        This method is DT-independent, and call sub-functions which have a common 
-        I/O structure, which in turn rely on DT-dependent backend.
-        It outputs an instance of the Scattering Statistics class.
-        Additional sub-methods can be called directly to get the desired output
+        Alternative constructor, which generates the ST operator used to 
+        compute a given set of ST statistics.
+        
+        Parameters
+        ----------
+        - st_stat : ST_Statistics
+            st_stat instance whose parameters have to be reproduced
+        - N0_new : tuple
+            new initial size of array (can be multiple dimensions)
+            
+        Remark and to do
+        ----------
+        - In fact, a ST_Statistics instance cannot transmit the flatten 
+        parameter, since it would have return a 1D array. This is not clear
+        for me how to deal with this point.
+            
+        '''
+        
+        N0 = st_stat.N0 if N0_new is None else N0_new
+        
+        return ST_Operator(st_stat.DT, 
+                           N0, 
+                           J =st_stat.J, 
+                           L=st_stat.L, 
+                           WType=st_stat.WType, 
+                           SC=st_stat.SC, 
+                           jmin=st_stat.jmin,
+                           jmax=st_stat.jmax,
+                           dj=st_stat.dj,
+                           pbc=st_stat.pbc, 
+                           mask_MR=st_stat.mask_MR, 
+                           norm=st_stat.norm, 
+                           S2_ref=st_stat.S2_ref,
+                           iso=st_stat.iso, 
+                           angular_ft=st_stat.angular_ft,
+                           scale_ft=st_stat.scale_ft,
+                           flatten = st_stat.flatten,
+                           mask_st=st_stat.mask_st
+                           )
+        
+    ########################################
+    def apply(self, data, 
+              SC=None, jmin=None, jmax=None, dj=None,
+              pbc=None, mask_MR=None, pass_mask=False,
+              norm=None, S2_ref=None, iso=None, 
+              angular_ft=None, scale_ft=None,
+              flatten=None, mask_st=None):
+        '''
+        Compute the Scattering Transform (ST) of data, which are either stored 
+        in an instance of the ST statistics class, or returned as a flatten
+        array.
+        
+        This DT-independent methods calls sub-functions which have a common 
+        I/O structure, and in turn rely on DT-dependent backend.
+        
+        It outputs an instance of the Scattering Statistics class, whose 
+        additional methods can be called directly to get the desired output.
+        
+        Uses ST operator parameters unless explicitly overridden in apply.
         
         !!! Attention: I give an example in torch here, but we should consider
         how to include different backend !!!
@@ -79,31 +230,46 @@ class ST_Operator:
 
         Parameters
         ----------
-        - data : stl_data, dim (N) or (Nc, N) or (Nb, Nc, N)
-            data, can be batched on several dimensions
-            data propose the form above with Nc the number of channels and
-            Nb the batch size
-        - I_fourier : bool
-            is the input image in real space or in Fourier space.
+        # Data
+        - data : StlData with MR=False, dim (N) or (Nc, N) or (Nb, Nc, N)
+            data, Nc number of channel, Nb batch size. Should have dg=0.
+    
+        # Scattering Transform
+        - SC : str 
+            type of ST coefficients ("ScatCov", "WPH")
         - jmin : int
-            minimum scale at which the ST statistics are computed
+            minimum scale for ST statistics computation
         - jmax : int
-            maximum scale at which the ST statistics are computed
+            maximum scale for ST statistics computation
         - dj : int
-            maximum scale ratio at which the ST statistics are computed
+            maximum scale difference for ST statistics computation
         - pbc : bool
             periodic boundary conditions
-        - mask : (..., N) or (N)
-            mask(s) to be used during the convolution. Either a single mask
-            or a collection of masks can be given (should match some of the
-            last dimensions of I if it is the case)
+        - mask_MR : StlData with MR=True or None
+            Multi-resolution masks, requires list_dg = range(dg_max + 1)
+        - pass_mask : bool
+            Pass mask to ST statistics object if True
+            
+        # Additional transform/compression
+        - norm : str
+            type of norm ("S2", "S2_ref")
+        - S2_ref : array
+            array of reference S2 coefficients
+        - iso : bool
+            keep only isotropic coefficients
+        - angular_ft : bool
+            perform angular fourier transform on the ST statistics
+        - scale_ft : bool
+            perform scale cosine transform on the ST statistics
+        - flatten : bool
+            only return a 1D-array and not a ST_Statistics instance
+        - mask_st : list of position
+            mask to be applied when flatten ST statistics
             
         Output 
         ----------
-        - I_st : scattering statistics instance
-            ST statistics of I
-            -> output can be refined by direct application of submethod.
-            
+        - data_st : ST_Statistics instance, or 1D array
+            ST statistics of I, as a flatten array if flatten=True        
         '''
         
         ########################################
@@ -112,208 +278,250 @@ class ST_Operator:
         
         # Consistency checks
         if self.DT != data.DT:
-            raise Exception("Scattering operator and data should have same data type") 
-        if self.N != data.N:
-            raise Exception("Scattering operator and data should have same data size") 
-            # I prefer to impose that to avoid unefficient computation. 
+            raise Exception(
+                "Scattering operator and data should have same DT") 
+        if self.N0 != data.N0:
+            raise Exception(
+                "Scattering operator and data should have same N0") 
+        if self.dg != 0:
+            raise Exception("Data expected with dg=0") 
         
-        # Shortcut for better readibility
-        N = self.N
+        # Local value for the wavelet transform parameters
+        N0 = self.N0
         J = self.J
         L = self.L
-        Nj = self.wavelet_op.MR_array
+        j_to_dg = self.wavelet_op.j_to_dg
+        WType = self.wavelet_op.WType
         
-        # Initialize parameter values if None
-        jmin = 0 if jmin==None else jmin
-        jmax = self.J if jmax==None else jmax
-        dj = self.J if dj==None else dj
+        # Local value for the scattering transform parameters
+        SC = self.SC if SC is None else SC
+        jmin = self.jmin if jmin is None else jmin
+        jmax = self.jmax if jmax is None else jmax
+        dj = self.dj if dj is None else dj
+        pbc = self.pbc if pbc is None else pbc
+        mask_MR = self.mask_MR if mask_MR is None else mask_MR
+        
+        # Local value for the additional transforms parameters
+        norm = self.norm if norm is None else norm
+        S2_ref = self.S2_ref if S2_ref is None else S2_ref
+        iso = self.iso if iso is None else iso
+        angular_ft = self.angular_ft if angular_ft is None else angular_ft
+        scale_ft = self.scale_ft if scale_ft is None else scale_ft
+        flatten = self.flatten if flatten is None else flatten
+        mask_st = self.mask_st if mask_st is None else mask_st
+        
+        # Put in torch or relevant bk
+        if type(data.array) == np.ndarray:
+            data.array = bk.from_numpy(data.array)
+        
+        # Put in the expected size: (Nb, Nc, N) 
+        N_DT = len(N0)
+        if bk.dim(data.array) == N_DT:
+            data.array = data.array[None, None, ...]                   #(1,1,N)
+        elif bk.dim(data.array) == N_DT + 1:
+            data.array = data.array[None, ...]                        #(1,Nc,N)            
+        Nb, Nc = bk.shape(data.array, 0), bk.shape(data.array, 1)
         
         # Create a ST_statistics instance
-        data_st = ST_Statistics(self.N, self.J, self.L, self.WType, self.SC, \
-                             jmin, jmax, dj)
-            
-        # Identify the dimension of the image, reshape, and pass in torch
-        # Put in the expected size: (Nb, Nc, N) 
-        N_DT = len(N)
-        if data.data.ndim == N_DT:
-            data.data = data.data[None, None, ...]                     #(1,1,N)
-        elif data.data.ndim == N_DT + 1:
-            data.data = data.data[None, ...]                          #(1,Nc,N)            
-        Nb, Nc = data.data.shape[0], data.data.shape[1]
-        # Put in torch <- to see with backend
-        if type(data.data) == np.ndarray:
-            data.data = torch.from_numpy(data.data)
+        data_st = ST_Statistics(self.DT, N0, J, L, WType,
+                                SC, jmin, jmax, dj,
+                                pbc, mask_MR if pass_mask else None,
+                                Nb, Nc)
             
         # Define the mask for conv computation if necessary
         if not pbc:
-            mask_bc = self.construct_mask_bc()
-            mask_bc = mask_bc[None, None, ...]                         #(1,1,N)     
+            mask_bc = self.construct_mask_bc(mask_MR)                   
         else: 
-            mask_bc = None
+            mask_bc = mask_MR
             
         # Initialize ST statistics values
-        # Could be added in the data_st initialization
-        data_st.S1 = torch.zeros((Nb,Nc,J,L))
-        data_st.S2 = torch.zeros((Nb,Nc,J,L))
-        data_st.S3 = torch.zeros((Nb,Nc,J,J,L,L)) + np.nan
-        data_st.S4 = torch.zeros((Nb,Nc,J,J,J,L,L)) + np.nan
+        # Add readability w.r.t. having it in the ST statistics initilization
+        if self.SC == "ScatCov":
+            data_st.S1 = bk.zeros((Nb,Nc,J,L))
+            data_st.S2 = bk.zeros((Nb,Nc,J,L))
+            data_st.S3 = bk.zeros((Nb,Nc,J,J,L,L)) + bk.nan
+            data_st.S4 = bk.zeros((Nb,Nc,J,J,J,L,L)) + bk.nan
         
         ########################################
-        # First order computation
+        # ST coefficients computation
         ########################################
+
+        # I give here 4 different ST computations, for illustration purpose.
+        # They are without npbc, masks, jmin, jmax, dj...
+        # We assume that scales increase with j.
+        # We only do a first convolution at all scales, without a MR framework.
         
-        # First version, simple form and without npbc, masks, jmin, jmax, dj...
-        # Here scales increase with j. 
-        
-        # Attention !! Here at all scales, and without a MR framework, for the
-        # first convolution. I didn't code the other version for the moment.
-        if self.wavelet_op.full_conv:
-        
-            # Compute first convolution and modulus
-            data_l1 = self.wavelet_op.apply(data)                #(Nb,Nc,J,L,N)
-            data_l1m = data_l1.module_fonc(copy=True)            #(Nb,Nc,J,L,N) 
-            # Replacement if we do not need data_l1
-            data_l1m = self.wavelet_op.apply(data).module_fonc() #(Nb,Nc,J,L,N) 
-            
-            # Compute S1 and S2
-            data_st.S1 = data_l1m.mean_fonc()                      #(Nb,Nc,J,L)
-            data_st.S2 = data_l1m.mean_fonc(square=True)           #(Nb,Nc,J,L)
+        ### !! WARNING: simple code break here !! ###
+        # Should probably be segmented in subfunction.
         
         ########################################
-        # Higher order computation
-        # Version vanilla 
-        ########################################
+        ### Version vanilla ###
         
+        # Vanilla version uses the following form for S3 and S4
+        # S3 = Cov(|I*psi1|*psi2, I*psi2)
+        # S4 = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
+        
+        # Compute first convolution and modulus
+        data_l1 = self.wavelet_op.apply(data)                    #(Nb,Nc,J,L,N)
+        data_l1m = data_l1.modulus_func(copy=True)                #(Nb,Nc,J,L,N) 
+        
+        # Compute S1 and S2
+        data_st.S1 = data_l1m.mean_func()                          #(Nb,Nc,J,L)
+        data_st.S2 = data_l1m.mean_func(square=True)               #(Nb,Nc,J,L)
+        
+        ### Higher order computation ###
         for j3 in range(J):
             # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
-            data_l1.data = data_l1.data[:,:,:j3+1]            #(Nb,Nc,j3+1,L,N)
-            data_l1m.data = data_l1m.data[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
-            # Batch downsample at Nj3
-            data_l1.downsample(Nj[j3])                      #(Nb,Nc,j3+1,L,Nj3)
-            data_l1m.downsample(Nj[j3])                     #(Nb,Nc,j3+1,L,Nj3)
+            data_l1.array = data_l1.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
+            data_l1m.array = data_l1m.array[:,:,:j3+1]        #(Nb,Nc,j3+1,L,N)
+            # Downsample at Nj3
+            data_l1.downsample(j_to_dg[j3])                  #(Nb,Nc,j3+1,L,N3)
+            data_l1m.downsample(j_to_dg[j3])                 #(Nb,Nc,j3+1,L,N3)
             
             # Compute |I*psi2|*psi3                      #(Nb,Nc,j3+1,L2,L3,N3)
             data_l1m_l2 = self.wavelet_op.apply(data_l1m, j3) 
             
             for j2 in range(j3+1):
                 # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
-                data_st.S3[:,:,j2,j3,:,:] = stl_data.cov(
+                data_st.S3[:,:,j2,j3,:,:] = StlData.cov(
                                  data_l1m_l2[:,:,j2],         #(Nb,Nc,L2,L3,N3)
                                  data_l1[:,:,j3,None]         #(Nb,Nc, 1,L3,N3)
                                  )        
                 
                 for j1 in range(j2+1):
                     # S4(j1,j2,j3) = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
-                    data_st.S4[:,:,j1,j2,j3,:,:,:] = stl_data.cov(
+                    data_st.S4[:,:,j1,j2,j3,:,:,:] = StlData.cov(
                             data_l1m_l2[:,:,j1,:,None],    #(Nb,Nc,L1, 1,L3,N3)
                             data_l1m_l2[:,:,j2,None,:]     #(Nb,Nc, 1,L2,L3,N3)
                             )
                 
-        ########################################
-        # Higher order computation
-        # Version batchée vanilla 
-        ########################################
-        
+        ### Alternative Higher order computation, version batchée ###
         for j3 in range(J):
             # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
-            data_l1.data = data_l1.data[:,:,:j3+1]            #(Nb,Nc,j3+1,L,N)
-            data_l1m.data = data_l1m.data[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
-            # Batch downsample at Nj3
-            data_l1.downsample(Nj[j3])                      #(Nb,Nc,j3+1,L,Nj3)
-            data_l1m.downsample(Nj[j3])                     #(Nb,Nc,j3+1,L,Nj3)
+            data_l1.array = data_l1.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
+            data_l1m.array = data_l1m.array[:,:,:j3+1]        #(Nb,Nc,j3+1,L,N)
+            # Downsample at Nj3
+            data_l1.downsample(j_to_dg[j3])                  #(Nb,Nc,j3+1,L,N3)
+            data_l1m.downsample(j_to_dg[j3])                 #(Nb,Nc,j3+1,L,N3)
             
             # Compute |I*psi2|*psi3                      #(Nb,Nc,j3+1,L2,L3,N3)
             data_l1m_l2 = self.wavelet_op.apply(data_l1m, j3) 
             
             # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
-            data_st.S3[:,:,:j3+1,j3,:,:] =stl_data.cov(
+            data_st.S3[:,:,:j3+1,j3,:,:] = StlData.cov(
                        data_l1m_l2[:,:,:j3+1],           #(Nb,Nc,j3+1,L2,L3,N3)
                        data_l1[:,:,j3,None,None]         #(Nb,Nc,   1, 1,L3,N3)
                        )
                 
             for j2 in range(j2+1):
                 # S4(j1,j2,j3) = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
-                data_st.S4[:,:,:j2+1,j2,j3,:,:,:] = stl_data.cov(
+                data_st.S4[:,:,:j2+1,j2,j3,:,:,:] = StlData.cov(
                     data_l1m_l2[:,:,:j2+1,:,None],    #(Nb,Nc,j2+1,L1, 1,L3,N3)
                     data_l1m_l2[:,:,j2,None,None,:]   #(Nb,Nc,   1, 1,L2,L3,N3)
                         )
+
+        ########################################
+        ###  Version Sihao (adaptée) ###
+        
+        # Vanilla version uses the following form for S3 and S4
+        # S3 = Cov(|I*psi1|, I*psi2)
+        # S4 = Cov(|I*psi1|, |I*psi2|*psi3)
+        
+        # Compute first convolution and modulus
+        data_l1m = self.wavelet_op.apply(data).modulus_func()     #(Nb,Nc,J,L,N) 
+        
+        # Compute S1 and S2
+        data_st.S1 = data_l1m.mean_func()                          #(Nb,Nc,J,L)
+        data_st.S2 = data_l1m.mean_func(square=True)               #(Nb,Nc,J,L)
          
-        ########################################
-        # Higher order computation
-        # Version Sihao (adaptée)
-        ########################################
-        
-        # -> no need to store data_l1 at all !
-        
+        ### Higher order computation ###
         for j3 in range(J):
             # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
             data_l1m.data = data_l1m.data[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
-            # Batch downsample at Nj3
-            data_l1m.downsample(Nj[j3])                      #(Nb,Nc,j3+1,L,N3)
+            # Downsample at Nj3
+            data.downsample(j_to_dg[j3])                            #(Nb,Nc,N3)
+            data_l1m.downsample(j_to_dg[j3])                 #(Nb,Nc,j3+1,L,N3)
             
             for j2 in range(j3+1):
                 # Compute |I*psi2|*psi3                       #(Nb,Nc,L2,L3,N3)
                 data_l1m_l2 = self.wavelet_op.apply(data_l1m[:,:,j2], j3) 
                 
                 # S3(j2,j3) = Cov(I, |I*psi2|*psi3) 
-                data_st.S3[:,:,j2,j3,:,:] = stl_data.cov(
-                                 data[:,:,None,None],         #(Nb,Nc, 1, 1,N)
-                                 data_l1m_l2[:,:]             #(Nb,Nc,L2,L3,N3)
+                data_st.S3[:,:,j2,j3,:,:] = StlData.cov(
+                                 data[:,:,None,None],         #(Nb,Nc, 1, 1,N3)
+                                 data_l1m_l2                  #(Nb,Nc,L2,L3,N3)
                                  )        
                 
                 for j1 in range(j2+1):
                     # S4(j1,j2,j3) = Cov(|I*psi1|, |I*psi2|*psi3)
-                    data_st.S4[:,:,j1,j2,j3,:,:,:] = stl_data.cov(
+                    data_st.S4[:,:,j1,j2,j3,:,:,:] = StlData.cov(
                          data_l1m[:,:,j1,:,None,None],     #(Nb,Nc,L1, 1, 1,N3)
                          data_l1m_l2[:,:,None,:,:]         #(Nb,Nc, 1,L2,L3,N3)
                             )
         
-        ########################################
-        # Higher order computation
-        # Version Sihao batchée
-        ########################################
-        
-        # -> no need to store data_l1 at all !
-        
+        ### Alternative higher order computation, version batchée ###
         for j3 in range(J):
             # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
             data_l1m.data = data_l1m.data[:,:,:j3+1]         #(Nb,Nc,:j3+1,L,N)
-            # Batch downsample at Nj3
-            data_l1m.downsample(Nj[j3])                    #(Nb,Nc,:j3+1,L,Nj3)
+            # Downsample at Nj3
+            data.downsample(j_to_dg[j3])                            #(Nb,Nc,N3)
+            data_l1m.downsample(j_to_dg[j3])                #(Nb,Nc,:j3+1,L,N3)
             
             # Compute |I*psi2|*psi3                     #(Nb,Nc,:j3+1,L2,L3,N3)
             data_l1m_l2 = self.wavelet_op.apply(data_l1m, j3) 
                         
             # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
-            data_st.S3[:,:,:j3+1,j3,:,:] =stl_data.cov(
-                       data[:,:,None,None,None],         #(Nb,Nc,   1, 1, 1,N)
+            data_st.S3[:,:,:j3+1,j3,:,:] = StlData.cov(
+                       data[:,:,None,None,None],         #(Nb,Nc,   1, 1, 1,N3)
                        data_l1m_l2[:,:,:j3+1]            #(Nb,Nc,j3+1,L2,L3,N3)
                        )
                 
             for j2 in range(j3+1):
                     # S4(j1,j2,j3) = Cov(|I*psi1|, |I*psi2|*psi3)
-                data_st.S4[:,:,:j2+1,j2,j3,:,:,:] = stl_data.cov(
+                data_st.S4[:,:,:j2+1,j2,j3,:,:,:] = StlData.cov(
                   data_l1m[:,:,:j2+1,:,None,None],    #(Nb,Nc,j2+1,L1  1, 1,N3)
                   data_l1m_l2[:,:,j2,None,None],      #(Nb,Nc,   1, 1,L2,L3,N3)
                         )
+                
+        ########################################
+        # Additional transform/compression
+        ########################################
+        
+        if norm is not None:
+            data_st.to_norm(norm, S2_ref)
+            
+        if iso:
+            data_st.to_iso()
+            
+        if angular_ft:
+            data_st.to_angular_ft()
+            
+        if scale_ft:
+            data_st.to_scale_ft()            
+            
+        if flatten:
+            data_st.flatten(mask_st)
         
         return data_st
     
     ########################################
-    def construct_mask_bc(self):
+    def construct_mask_bc(self, mask_MR):
         '''
-        Construct the mask used when computing covariances when pbc==False
+        Construct the MR mask used when computing mean and covariances.
+        It takes into acount the initial mask_MR if not None.
+        Else, it just return a mask to deal with the non-periodic boundary 
+        conditions.
 
+        To be written.
+        
         Returns
         -------
-        mask_bc : TYPE
+        mask_bc_MR : TYPE
             DESCRIPTION.
 
         '''
+
         
-        # Need to be done
-        mask_bc = np.ones(self.N)
-        
-        return mask_bc
+        return 1
         
     
