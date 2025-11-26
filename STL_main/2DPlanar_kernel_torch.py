@@ -111,7 +111,28 @@ class 2DPlanar_kernel_torch:
         findN = {"DT1": DT1_findN, "DT2": DT2_findN}.get(self.DT)
         if N0==None:
             self.N0 = findN(self.array, self.Fourier)
-
+        
+        
+        self.smooth_kernel=_smooth_kernel(3)
+        
+    def _smooth_kernel(kernel_size: int):
+        """Create a 2D Gaussian kernel."""
+        sigma=1
+        # 1D coordinate grid centered at 0
+        coords = torch.arange(kernel_size, device=device, dtype=dtype) - (kernel_size - 1) / 2.0
+        yy, xx = torch.meshgrid(coords, coords, indexing="ij")
+        kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+        kernel = kernel / kernel.sum()
+        return kernel
+            
+    def _wavelet_kernel(kernel_size: int,n_orientation: int):
+        """Create a 2D Gaussian kernel."""
+        # 1D coordinate grid centered at 0
+        coords = torch.arange(kernel_size, device=device, dtype=dtype) - (kernel_size - 1) / 2.0
+        yy, xx = torch.meshgrid(coords, coords, indexing="ij")
+        kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+        kernel = kernel / kernel.sum()
+        return kernel
         
     ###########################################################################
     def copy(self, empty=False):
@@ -420,27 +441,10 @@ class 2DPlanar_kernel_torch:
         
         
         def get_wavelet_op(self,J=None,L=None):
+            
             return wop_class
             
-sigma=1
 
-def _smooth_kernel(kernel_size: int):
-    """Create a 2D Gaussian kernel."""
-    # 1D coordinate grid centered at 0
-    coords = torch.arange(kernel_size, device=device, dtype=dtype) - (kernel_size - 1) / 2.0
-    yy, xx = torch.meshgrid(coords, coords, indexing="ij")
-    kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
-    kernel = kernel / kernel.sum()
-    return kernel
-    
-def _wavelet_kernel(kernel_size: int,n_orientation: int):
-    """Create a 2D Gaussian kernel."""
-    # 1D coordinate grid centered at 0
-    coords = torch.arange(kernel_size, device=device, dtype=dtype) - (kernel_size - 1) / 2.0
-    yy, xx = torch.meshgrid(coords, coords, indexing="ij")
-    kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
-    kernel = kernel / kernel.sum()
-    return kernel
     
 ###############################################################################
 def to_array(array):
