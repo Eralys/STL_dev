@@ -18,6 +18,7 @@ Characteristics:
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 ###############################################################################
 ###############################################################################
@@ -82,7 +83,7 @@ class STL2DKernel:
     '''
     
     ###########################################################################
-    def __init__(self, array, N0=None, Fourier=False):
+    def __init__(self, array, smooth_kernel=None):
         '''
         Constructor, see details above. Frontend version, which assume the 
         array is at N0 resolution with dg=0, with MR=False.
@@ -99,9 +100,10 @@ class STL2DKernel:
         
         self.MR = False
         self.dg = 0
-        self.N0 = N0
+        self.Nx = array.shape[-2]
+        self.Ny = array.shape[-1]
+        
         self.list_dg = None
-        self.Fourier = Fourier
         
         self.array = self.to_array(array)
         
@@ -109,8 +111,10 @@ class STL2DKernel:
         
         self.device='cuda'
         self.dtype=torch.float
+        if smooth_kernel is None:
+            smooth_kernel=self._smooth_kernel(3)
+        self.smooth_kernel=smooth_kernel
         
-        self.smooth_kernel=self._smooth_kernel(3)
         
     def _smooth_kernel(self,kernel_size: int):
         """Create a 2D Gaussian kernel."""
@@ -122,18 +126,6 @@ class STL2DKernel:
         kernel = kernel / kernel.sum()
         return kernel
             
-    def _wavelet_kernel(self,kernel_size: int,n_orientation: int,sigma=1):
-        """Create a 2D Gaussian kernel."""
-        # 1D coordinate grid centered at 0
-        coords = torch.arange(kernel_size, device=self.device, dtype=self.dtype) - (kernel_size - 1) / 2.0
-        yy, xx = torch.meshgrid(coords, coords, indexing="ij")
-        mother_kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))[None,:,:]
-        angles=torch.arange(n_orientation, device=self.device, dtype=self.dtype)/n_orientation*np.pi
-        angles_proj=torch.pi*(xx[None,...]*torch.cos(angles[:,None,None])+yy[None,...]*torch.sin(angles[:,None,None]))
-        kernel = torch.complex(torch.cos(angles)*mother_kernel,torch.sin(angles)*mother_kernel)
-        kernel = kernel / torch.sum(kernel.sum,dim=(1,2))
-        return kernel
-        
     ###########################################################################
     def to_array(self,array):
         """
@@ -465,12 +457,113 @@ class STL2DKernel:
         
         return cov
         
+       
+    def get_wavelet_op(self,kernel_size=5,L=4):
         
-    def get_wavelet_op(self,J=None,L=None):
+        return WavelateOperator2Dkernel_torch(kernel_size,L,device=self.array.device,dtype=self.array.dtype)
+       
+
+class WavelateOperator2Dkernel_torch:
+    def __init__(self, kernel_size: int, L=4, device='cuda',dtype=torch.float):
+        """
+        kernel: torch.Tensor
+            Convolution kernel, either of shape [1, L, K, K] .
+            L is the number of output channels.
+        """
+        self.device=device
+        self.dtype=dtype
         
+        self.kernel = self._wavelet_kernel(kernel_size,L)
         
-        return wop_class
+    def _wavelet_kernel(self,kernel_size: int,n_orientation: int,sigma=1):
+        """Create a 2D Wavelet kernel."""
+        # 1D coordinate grid centered at 0
+        coords = torch.arange(kernel_size, device=self.device, dtype=self.dtype) - (kernel_size - 1) / 2.0
+        yy, xx = torch.meshgrid(coords, coords, indexing="ij")
+        mother_kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))[None,:,:]
+        angles=torch.arange(n_orientation, device=self.device, dtype=self.dtype)/n_orientation*np.pi
+        angles_proj=torch.pi*(xx[None,...]*torch.cos(angles[:,None,None])+yy[None,...]*torch.sin(angles[:,None,None]))
+        kernel = torch.complex(torch.cos(angles_proj)*mother_kernel,torch.sin(angles_proj)*mother_kernel)
+        kernel = kernel - torch.mean(kernel,dim=(1,2))[:,None,None]
+        kernel = kernel / torch.sum(kernel.abs(),dim=(1,2))[:,None,None]
+        return kernel.reshape(1,n_orientation,kernel_size,kernel_size)
             
+
+    def apply(self, data):
+        """
+        Apply the convolution kernel to data.array [..., Nx, Ny]
+        and return cdata [..., L, Nx, Ny].
+
+        Parameters
+        ----------
+        data : object
+            Object with an attribute `array` storing the data as a tensor
+            or numpy array with shape [..., Nx, Ny].
+
+        Returns
+        -------
+        torch.Tensor
+            Convolved data with shape [..., L, Nx, Ny].
+        """
+        x = data.array  # [..., Nx, Ny]
+
+        # Ensure x is a torch tensor on the same device / dtype as the kernel
+        x = torch.as_tensor(x, device=self.kernel.device, dtype=self.kernel.dtype)
+
+        # Separate leading dimensions and spatial dimensions
+        *leading_dims, Nx, Ny = x.shape
+
+        # Flatten all leading dims into a single batch dimension for conv2d
+        # After this, x_4d has shape [B, 1, Nx, Ny], with B = prod(leading_dims)
+        if leading_dims:
+            B = 1
+            for d in leading_dims:
+                B *= d
+        else:
+            B = 1
+
+        x_4d = x.reshape(B, 1, Nx, Ny)
+
+        # Prepare the kernel for torch.nn.functional.conv2d
+        k = self.kernel
+        if k.dim() != 4:
+            raise ValueError(f"Kernel must have 4 dimensions, got shape {k.shape}.")
+
+        c0, c1, Kh, Kw = k.shape
+
+        # We accept kernels of shape [1, L, K, K] or [L, 1, K, K]
+        # and convert them to [L, 1, K, K] for conv2d.
+        if c0 == 1:
+            # Kernel is [1, L, K, K] -> permute to [L, 1, K, K]
+            weight = k.permute(1, 0, 2, 3).contiguous()
+            out_channels = c1
+        elif c1 == 1:
+            # Kernel is already [L, 1, K, K]
+            weight = k
+            out_channels = c0
+        else:
+            raise ValueError(
+                f"Kernel shape {k.shape} is not compatible with "
+                "expected [1, L, K, K] or [L, 1, K, K]."
+            )
+
+        # Use 'same' padding manually: assuming K is odd
+        pad_h = Kh // 2
+        pad_w = Kw // 2
+
+        # Perform the 2D convolution:
+        # x_4d:    [B, 1, Nx, Ny]
+        # weight:  [L, 1, Kh, Kw]
+        # result:  [B, L, Nx, Ny] (because of padding)
+        y_4d = F.conv2d(x_4d, weight, padding=(pad_h, pad_w))
+
+        # Reshape back to original leading dims plus channel L and spatial dims
+        # y_4d has shape [B, L, Nx, Ny]
+        new_shape = (*leading_dims, out_channels, Nx, Ny)
+        cdata = y_4d.reshape(new_shape)
+
+        return STL2DKernel(cdata,smooth_kernel=data.smooth_kernel)
+        
 
 '''  
 ###############################################################################
