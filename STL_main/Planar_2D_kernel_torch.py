@@ -130,7 +130,7 @@ class Planar2D_kernel_torch:
         mother_kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))[None,:,:]
         angles=torch.arange(n_orientation, device=self.device, dtype=self.dtype)/n_orientation*np.pi
         angles_proj=torch.pi*(xx[None,...]*torch.cos(angles[:,None,None])+yy[None,...]*torch.sin(angles[:,None,None]))
-        kernel = torch.complex(np.cos(angles)*mother_kernel,np.sin(angles)*mother_kernel)
+        kernel = torch.complex(torch.cos(angles)*mother_kernel,torch.sin(angles)*mother_kernel)
         kernel = kernel / torch.sum(kernel.sum,dim=(1,2))
         return kernel
         
