@@ -174,7 +174,7 @@ class Wavelet_Operator:
         # To be done
         
     ###########################################################################
-    def apply(self, data, MR=None, j=None, mask_MR=None, O_Fourier=None):
+    def apply(self, data, j=None, MR=None, mask_MR=None, O_Fourier=None):
                   
         '''
         Compute the Wavelet Transform (WT) of data.
