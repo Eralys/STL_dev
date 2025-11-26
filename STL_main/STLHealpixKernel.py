@@ -32,10 +32,10 @@ class STLHealpixKernel:
         Data type identifier ("HealpixKernel_torch").
     MR : bool
         If True, stores a list of arrays at multiple resolutions.
-    nside0 : int
+    N0 : int
         Initial HEALPix nside at dg=0.
     dg : int or None
-        downgrading level (nside = nside0 // 2**dg) if MR == False.
+        downgrading level (nside = N0 // 2**dg) if MR == False.
     list_dg : list[int] or None
         List of downgrading levels if MR == True.
     array : torch.Tensor or list[torch.Tensor]
@@ -82,12 +82,12 @@ class STLHealpixKernel:
         else:
             self.dg = int(dg)
 
-        # Store nside0 as the "reference" resolution at dg=0
+        # Store N0 as the "reference" resolution at dg=0
         if nside is None:
-            nside=int(np.sqrt(arry.shape[-1]//12))
+            nside=int(np.sqrt(array.shape[-1]//12))
             
         self.N0 = [int(nside)]
-        # Current nside is nside0 // 2**dg
+        # Current nside is N0 // 2**dg
         self.nside = self.N0[0] // (2 ** self.dg)
 
         # Convert array to tensor and determine device/dtype
@@ -181,7 +181,7 @@ class STLHealpixKernel:
         new.DT = self.DT
         new.MR = self.MR
         new.nest = self.nest
-        new.nside0 = self.nside0
+        new.N0 = self.N0
         new.nside = self.nside
         new.dg = self.dg
         new.list_dg = list(self.list_dg) if self.list_dg is not None else None
@@ -395,7 +395,7 @@ class STLHealpixKernel:
 
         The logic is:
           dg_out >= dg
-          nside_out = nside0 // 2**dg_out
+          nside_out = N0 // 2**dg_out
 
         Only supports MR == False.
 
@@ -488,7 +488,7 @@ class STLHealpixKernel:
         L : int or None
             Number of orientations, default 4.
         J : int or None
-            Number of scales. If None, set from nside0 (roughly log2(nside0)-2).
+            Number of scales. If None, set from N0 (roughly log2(N0)-2).
 
         Returns
         -------
