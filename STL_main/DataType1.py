@@ -424,6 +424,7 @@ def DT1_cov_func(array1, Fourier1, array2, Fourier2,
     if mask is None and Fourier1 and Fourier2:
         # Compute covariance (complex values)
         cov =  torch.mean(array1 * array2.conj(), dim=(-2, -1)).real
+
     else:
         # We pass everything to real space
         if Fourier1:
@@ -438,6 +439,7 @@ def DT1_cov_func(array1, Fourier1, array2, Fourier2,
         mask = 1 if mask is None else mask
         # Compute covariance (complex values)
         cov =  torch.mean(_array1 * _array2 * mask, dim=(-2, -1))
+
             
     return cov
 
@@ -715,7 +717,6 @@ def DT1_wavelet_conv(data, wavelet_j, Fourier, mask_MR):
     - Fourier: bool 
         Fourier status of the convolution (True in this DT)
     """
-    
     # Pass data in Fourier if in real space
     _data = data if Fourier else torch.fft.fft2(data)
     
