@@ -21,7 +21,7 @@ import torch
 
 ###############################################################################
 ###############################################################################
-class StlData:
+class 2DPlanar_kernel_torch:
     '''
     Class which contain the different types of data used in STL.
     Store important parameters, such as DT, N0, and the Fourier type.
