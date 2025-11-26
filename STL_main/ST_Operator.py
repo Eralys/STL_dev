@@ -9,7 +9,7 @@ import numpy as np
 from StlData import StlData
 from WaveletTransform import Wavelet_Operator
 from ST_Statistics import ST_Statistics
-import bk # from_numpy, zeros, dim, shape, nan
+import backend as bk # from_numpy, zeros, dim, shape, nan
                     
 ###############################################################################
 ###############################################################################
@@ -95,13 +95,22 @@ class ST_Operator:
     '''
 
     ########################################
-    def __init__(self, 
+    def __init__(self,
                  DT, N0, J=None, L=None, WType=None,
                  SC="scat_cov", jmin=None, jmax=None, dj=None,
                  pbc=True, mask=None, 
                  norm="S2", S2_ref=None, iso=False, 
                  angular_ft=False, scale_ft=False,
-                 flatten=False, mask_st=None):
+                 flatten=False,
+                 wavelet_array = None,
+                 wavelet_array_MR = None,
+                 dg_max = None,
+                 j_to_dg = None,
+                 Single_Kernel = None,
+                 mask_st=None,
+                 mask_opt = False,
+                 mask_MR = None
+                 ):
         '''
         Constructor, see details above.
         
@@ -134,6 +143,7 @@ class ST_Operator:
         self.scale_ft = scale_ft
         self.flatten = flatten
         self.mask_st = mask_st
+        self.mask_MR = mask_MR
         
         # Check mask coherence and construct MR mask if necessary
         if mask is not None:
@@ -283,8 +293,8 @@ class ST_Operator:
         if self.N0 != data.N0:
             raise Exception(
                 "Scattering operator and data should have same N0") 
-        if self.dg != 0:
-            raise Exception("Data expected with dg=0") 
+        # if self.dg != 0:
+        #     raise Exception("Data expected with dg=0") 
         
         # Local value for the wavelet transform parameters
         N0 = self.N0
@@ -326,8 +336,8 @@ class ST_Operator:
         data_st = ST_Statistics(self.DT, N0, J, L, WType,
                                 SC, jmin, jmax, dj,
                                 pbc, mask_MR if pass_mask else None,
-                                Nb, Nc)
-            
+                                Nb, Nc, self.wavelet_op)
+        print(vars(data_st))
         # Define the mask for conv computation if necessary
         if not pbc:
             mask_bc = self.construct_mask_bc(mask_MR)                   
@@ -370,30 +380,30 @@ class ST_Operator:
         data_st.S2 = data_l1m.mean_func(square=True)               #(Nb,Nc,J,L)
         
         ### Higher order computation ###
-        for j3 in range(J):
-            # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
-            data_l1.array = data_l1.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
-            data_l1m.array = data_l1m.array[:,:,:j3+1]        #(Nb,Nc,j3+1,L,N)
-            # Downsample at Nj3
-            data_l1.downsample(j_to_dg[j3])                  #(Nb,Nc,j3+1,L,N3)
-            data_l1m.downsample(j_to_dg[j3])                 #(Nb,Nc,j3+1,L,N3)
+        # for j3 in range(J):
+        #     # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
+        #     data_l1.array = data_l1.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
+        #     data_l1m.array = data_l1m.array[:,:,:j3+1]        #(Nb,Nc,j3+1,L,N)
+        #     # Downsample at Nj3
+        #     data_l1.downsample(j_to_dg[j3])                  #(Nb,Nc,j3+1,L,N3)
+        #     data_l1m.downsample(j_to_dg[j3])                 #(Nb,Nc,j3+1,L,N3)
             
-            # Compute |I*psi2|*psi3                      #(Nb,Nc,j3+1,L2,L3,N3)
-            data_l1m_l2 = self.wavelet_op.apply(data_l1m, j3) 
+        #     # Compute |I*psi2|*psi3                      #(Nb,Nc,j3+1,L2,L3,N3)
+        #     data_l1m_l2 = self.wavelet_op.apply(data_l1m, j3) 
             
-            for j2 in range(j3+1):
-                # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
-                data_st.S3[:,:,j2,j3,:,:] = StlData.cov(
-                                 data_l1m_l2[:,:,j2],         #(Nb,Nc,L2,L3,N3)
-                                 data_l1[:,:,j3,None]         #(Nb,Nc, 1,L3,N3)
-                                 )        
+        #     for j2 in range(j3+1):
+        #         # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
+        #         data_st.S3[:,:,j2,j3,:,:] = StlData.cov_func(
+        #                          data_l1m_l2[:,:,j2],         #(Nb,Nc,L2,L3,N3)
+        #                          data_l1[:,:,j3,None]         #(Nb,Nc, 1,L3,N3)
+        #                          )        
                 
-                for j1 in range(j2+1):
-                    # S4(j1,j2,j3) = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
-                    data_st.S4[:,:,j1,j2,j3,:,:,:] = StlData.cov(
-                            data_l1m_l2[:,:,j1,:,None],    #(Nb,Nc,L1, 1,L3,N3)
-                            data_l1m_l2[:,:,j2,None,:]     #(Nb,Nc, 1,L2,L3,N3)
-                            )
+        #         for j1 in range(j2+1):
+        #             # S4(j1,j2,j3) = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
+        #             data_st.S4[:,:,j1,j2,j3,:,:,:] = StlData.cov_func(
+        #                     data_l1m_l2[:,:,j1,:,None],    #(Nb,Nc,L1, 1,L3,N3)
+        #                     data_l1m_l2[:,:,j2,None,:]     #(Nb,Nc, 1,L2,L3,N3)
+        #                     )
                 
         ### Alternative Higher order computation, version batchée ###
         for j3 in range(J):
@@ -408,14 +418,14 @@ class ST_Operator:
             data_l1m_l2 = self.wavelet_op.apply(data_l1m, j3) 
             
             # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
-            data_st.S3[:,:,:j3+1,j3,:,:] = StlData.cov(
+            data_st.S3[:,:,:j3+1,j3,:,:] = StlData.cov_func(
                        data_l1m_l2[:,:,:j3+1],           #(Nb,Nc,j3+1,L2,L3,N3)
                        data_l1[:,:,j3,None,None]         #(Nb,Nc,   1, 1,L3,N3)
                        )
                 
             for j2 in range(j2+1):
                 # S4(j1,j2,j3) = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
-                data_st.S4[:,:,:j2+1,j2,j3,:,:,:] = StlData.cov(
+                data_st.S4[:,:,:j2+1,j2,j3,:,:,:] = StlData.cov_func(
                     data_l1m_l2[:,:,:j2+1,:,None],    #(Nb,Nc,j2+1,L1, 1,L3,N3)
                     data_l1m_l2[:,:,j2,None,None,:]   #(Nb,Nc,   1, 1,L2,L3,N3)
                         )
@@ -447,14 +457,14 @@ class ST_Operator:
                 data_l1m_l2 = self.wavelet_op.apply(data_l1m[:,:,j2], j3) 
                 
                 # S3(j2,j3) = Cov(I, |I*psi2|*psi3) 
-                data_st.S3[:,:,j2,j3,:,:] = StlData.cov(
+                data_st.S3[:,:,j2,j3,:,:] = StlData.cov_func(
                                  data[:,:,None,None],         #(Nb,Nc, 1, 1,N3)
                                  data_l1m_l2                  #(Nb,Nc,L2,L3,N3)
                                  )        
                 
                 for j1 in range(j2+1):
                     # S4(j1,j2,j3) = Cov(|I*psi1|, |I*psi2|*psi3)
-                    data_st.S4[:,:,j1,j2,j3,:,:,:] = StlData.cov(
+                    data_st.S4[:,:,j1,j2,j3,:,:,:] = StlData.cov_func(
                          data_l1m[:,:,j1,:,None,None],     #(Nb,Nc,L1, 1, 1,N3)
                          data_l1m_l2[:,:,None,:,:]         #(Nb,Nc, 1,L2,L3,N3)
                             )
@@ -471,14 +481,14 @@ class ST_Operator:
             data_l1m_l2 = self.wavelet_op.apply(data_l1m, j3) 
                         
             # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
-            data_st.S3[:,:,:j3+1,j3,:,:] = StlData.cov(
+            data_st.S3[:,:,:j3+1,j3,:,:] = StlData.cov_func(
                        data[:,:,None,None,None],         #(Nb,Nc,   1, 1, 1,N3)
                        data_l1m_l2[:,:,:j3+1]            #(Nb,Nc,j3+1,L2,L3,N3)
                        )
                 
             for j2 in range(j3+1):
                     # S4(j1,j2,j3) = Cov(|I*psi1|, |I*psi2|*psi3)
-                data_st.S4[:,:,:j2+1,j2,j3,:,:,:] = StlData.cov(
+                data_st.S4[:,:,:j2+1,j2,j3,:,:,:] = StlData.cov_func(
                   data_l1m[:,:,:j2+1,:,None,None],    #(Nb,Nc,j2+1,L1  1, 1,N3)
                   data_l1m_l2[:,:,j2,None,None],      #(Nb,Nc,   1, 1,L2,L3,N3)
                         )
