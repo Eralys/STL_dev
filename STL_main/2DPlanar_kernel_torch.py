@@ -447,7 +447,7 @@ class 2DPlanar_kernel_torch:
         return wop_class
             
 
-    
+ '''  
 ###############################################################################
 def to_array(array):
     """
@@ -1189,3 +1189,4 @@ def DT1_wavelet_conv(data, wavelet_j, Fourier, mask_MR):
     
 def DT1_subsampling_func_fromMR(param):   
     pass
+'''
