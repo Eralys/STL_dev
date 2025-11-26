@@ -21,7 +21,7 @@ import torch
 
 ###############################################################################
 ###############################################################################
-class Planar_2D_kernel_torch:
+class Planar2D_kernel_torch:
     '''
     Class which contain the different types of data used in STL.
     Store important parameters, such as DT, N0, and the Fourier type.
@@ -103,14 +103,13 @@ class Planar_2D_kernel_torch:
         self.list_dg = None
         self.Fourier = Fourier
         
-        # Put array in the correct library (torch, tensorflow...)
-        to_array = {"DT1": DT1_to_array, "DT2": DT2_to_array}.get(self.DT)
-        self.array = to_array(array)
+        self.array = self.to_array(array)
         
         # Find N0 value
         
         self.device='cuda'
         self.dtype=torch.float
+        
         self.smooth_kernel=self._smooth_kernel(3)
         
     def _smooth_kernel(self,kernel_size: int):
@@ -130,11 +129,37 @@ class Planar_2D_kernel_torch:
         yy, xx = torch.meshgrid(coords, coords, indexing="ij")
         mother_kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))[None,:,:]
         angles=torch.arange(n_orientation, device=self.device, dtype=self.dtype)/n_orientation*np.pi
-        angles_proj=np.pi*(xx[None,...]*np.cos(angles[:,None,None])+yy[None,...]*np.sin(angles[:,None,None]))
+        angles_proj=torch.pi*(xx[None,...]*torch.cos(angles[:,None,None])+yy[None,...]*torch.sin(angles[:,None,None]))
         kernel = torch.complex(np.cos(angles)*mother_kernel,np.sin(angles)*mother_kernel)
         kernel = kernel / torch.sum(kernel.sum,dim=(1,2))
         return kernel
         
+    ###########################################################################
+    def to_array(self,array):
+        """
+        Transform input array (NumPy or PyTorch) into a PyTorch tensor.
+        Should return None if None.
+
+        Parameters
+        ----------
+        array : np.ndarray or torch.Tensor
+            Input array to be converted.
+
+        Returns
+        -------
+        torch.Tensor
+            Converted PyTorch tensor.
+        """
+        
+        if array is None:
+            return array
+        elif isinstance(array, np.ndarray):
+            return torch.from_numpy(array)
+        elif isinstance(array, torch.Tensor):
+            return array
+        else:
+            raise ValueError("Input must be a NumPy array or PyTorch tensor.")
+            
     ###########################################################################
     def copy(self, empty=False):
         """
@@ -447,7 +472,7 @@ class Planar_2D_kernel_torch:
         return wop_class
             
 
- '''  
+'''  
 ###############################################################################
 def to_array(array):
     """
