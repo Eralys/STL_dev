@@ -97,7 +97,7 @@ class STL2DKernel:
             raise ValueError("Only single resolution array are accepted.")
         
         # Main 
-        
+        self.DT='Planar2D_kernel_torch'
         self.MR = False
         if dg is None:
             self.dg = 0
@@ -149,13 +149,16 @@ class STL2DKernel:
         """
         
         if array is None:
+            return None
+        elif isinstance(array, list):
             return array
         elif isinstance(array, np.ndarray):
-            return torch.from_numpy(array)
+            return torch.from_numpy(array).to('cuda')
         elif isinstance(array, torch.Tensor):
-            return array
+            return array.to('cuda')
         else:
-            raise ValueError("Input must be a NumPy array or PyTorch tensor.")
+            raise TypeError(f"Unsupported array type: {type(array)}")
+
             
     ###########################################################################
     def copy(self, empty=False):
@@ -453,6 +456,8 @@ class STL2DKernel:
             data.array = [torch.abs(a) for a in data.array]
         else:
             data.array = torch.abs(data.array)
+            
+        data.dtype=data.array.dtype
 
         return data
         
@@ -508,7 +513,7 @@ class STL2DKernel:
         if data2 is None:
             y = x
         else:
-            if not isinstance(data2, Planar2D_kernel_torch):
+            if not isinstance(data2, STL2DKernel):
                 raise TypeError("data2 must be a Planar2D_kernel_torch instance.")
             if data2.MR:
                 raise ValueError("data2 must have MR == False.")
@@ -542,13 +547,21 @@ class STL2DKernel:
             
         return cov        
        
-    def get_wavelet_op(self,kernel_size=5,L=4):
+    def get_wavelet_op(self,kernel_size=None,L=None,J=None):
         
-        return WavelateOperator2Dkernel_torch(kernel_size,L,device=self.array.device,dtype=self.array.dtype)
+        if L is None:
+            L=4
+        if kernel_size is None:
+            kernel_size=5
+        if J is None:
+            J=np.min([int(np.log2(self.N0[0])),int(np.log2(self.N0[1]))])-3
+        
+        return WavelateOperator2Dkernel_torch(kernel_size,L,J,
+            device=self.array.device,dtype=self.array.dtype)
        
 
 class WavelateOperator2Dkernel_torch:
-    def __init__(self, kernel_size: int, L=4, device='cuda',dtype=torch.float):
+    def __init__(self, kernel_size: int, L: int, J: int, device='cuda',dtype=torch.float):
         """
         kernel: torch.Tensor
             Convolution kernel, either of shape [1, L, K, K] .
@@ -558,6 +571,9 @@ class WavelateOperator2Dkernel_torch:
         self.dtype=dtype
         
         self.kernel = self._wavelet_kernel(kernel_size,L)
+        self.L=L
+        self.J=J
+        self.WType='simple'
         
     def _wavelet_kernel(self,kernel_size: int,n_orientation: int,sigma=1):
         """Create a 2D Wavelet kernel."""
@@ -572,7 +588,9 @@ class WavelateOperator2Dkernel_torch:
         kernel = kernel / torch.sum(kernel.abs(),dim=(1,2))[:,None,None]
         return kernel.reshape(1,n_orientation,kernel_size,kernel_size)
             
-
+    def get_L(self):
+        return self.L
+        
     def apply(self, data,j):
         """
         Apply the convolution kernel to data.array [..., Nx, Ny]
@@ -649,5 +667,5 @@ class WavelateOperator2Dkernel_torch:
         new_shape = (*leading_dims, out_channels, Nx, Ny)
         cdata = y_4d.reshape(new_shape)
 
-        return STL2DKernel(cdata,smooth_kernel=data.smooth_kernel)
+        return STL2DKernel(cdata,smooth_kernel=data.smooth_kernel,dg=data.dg,N0=data.N0)
         

@@ -5,7 +5,7 @@ Main structure of STL
 Tentative proposal by EA 
 """
 
-import backend as bk # mean, zeros
+import torch as bk # mean, zeros
 
                     
 ###############################################################################
@@ -89,7 +89,7 @@ class ST_Statistics:
                  DT, N0, J, L, WType,
                  SC, jmin, jmax, dj,
                  pbc, mask_MR,
-                 Nb, Nc):
+                 Nb, Nc,wavelet_op):
         '''
         Constructor, see details above.
         '''
@@ -99,6 +99,7 @@ class ST_Statistics:
         self.N0 = N0
         
         # Wavelet transform related parameters
+        self.wavelet_op=wavelet_op
         self.J = self.wavelet_op.J
         self.L = self.wavelet_op.L
         self.WType = self.wavelet_op.WType
@@ -246,7 +247,7 @@ class ST_Statistics:
         return self
         
     ########################################
-    def flatten(self, mask_st):
+    def to_flatten(self, mask_st=None):
         '''
         Produce a 1d array that can be used for loss constructions.
         
@@ -263,7 +264,31 @@ class ST_Statistics:
             
         '''
         
-        #return st_flatten
+        # Collect all S1,S2,S3,S4 into a list
+        stats = [self.S1, self.S2, self.S3, self.S4]
+
+        # Flatten each, remove NaNs, concat
+        flattened_list = []
+        for S in stats:
+            # S may contain NaNs → keep only non-NaNs
+            S_flat = S.reshape(-1)
+            valid = ~bk.isnan(S_flat)
+            flattened_list.append(S_flat[valid])
+
+        # Concatenate all statistics into a single 1D vector
+        st_flatten = bk.cat(flattened_list, dim=0)
+
+        # Optional mask after nan-removal
+        if mask_st is not None:
+            mask_st = bk.as_tensor(mask_st, dtype=bk.bool, device=st_flatten.device)
+            if mask_st.numel() != st_flatten.numel():
+                raise ValueError(
+                    f"mask_st length {mask_st.numel()} does not match "
+                    f"flattened statistic length {st_flatten.numel()}."
+                )
+            st_flatten = st_flatten[mask_st]
+
+        return st_flatten
         
     ########################################
     def select(self, param):
