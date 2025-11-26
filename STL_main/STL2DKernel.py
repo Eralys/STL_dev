@@ -155,7 +155,7 @@ class STL2DKernel:
     ###########################################################################
     def copy(self, empty=False):
         """
-        Copy a stl_array instance.
+        Copy a Planar2D_kernel_torch instance.
         Array is put to None if empty==True.
         
         Parameters
@@ -165,298 +165,378 @@ class STL2DKernel:
                     
         Output 
         ----------
-        - StlData
+        - Planar2D_kernel_torch
            copy of self
         """
-        
-        return data
+        new = object.__new__(Planar2D_kernel_torch)
+
+        # Copy metadata
+        new.MR = self.MR
+        new.N0 = self.N0
+        new.dg = self.dg
+        new.list_dg = list(self.list_dg) if self.list_dg is not None else None
+        new.Fourier = self.Fourier
+        new.device = self.device
+        new.dtype = self.dtype
+
+        # Copy kernels
+        new.smooth_kernel = (self.smooth_kernel.clone()
+                             if isinstance(self.smooth_kernel, torch.Tensor)
+                             else None)
+
+        # Copy array
+        if empty:
+            new.array = None
+        else:
+            if self.MR:
+                new.array = [a.clone() if isinstance(a, torch.Tensor) else None
+                             for a in self.array]
+            else:
+                new.array = (self.array.clone()
+                             if isinstance(self.array, torch.Tensor) else None)
+
+        return new
 
     ###########################################################################
     def __getitem__(self, key):
         """
         To slice directly the array attribute. Produce a view of array, to 
         match with usual practices, allowing to conveniently pass only part
-        of a StlData instance.
-        
-        Additional copy method should be applied if necessary:
-            data = data[3,:,:].copy()
-        
-        When MR==False, we slice the multi-dimensional array:
-            data2 = data1[:, :, 3, :]
-        When MR==False, we slice the list of arrays:
-            data2 = data1[:3] (one single dimension)
-        
-        To modify directly self.array, one can also simply do
-        data.array = data.array[:,:,:3]
-        
-        Parameters
-        ----------
-        - key : slicing
-            slicing of the array attribute
-            Only one slice if self.array is a list
-            
-        Remark
-        ----------
-        - When slicing a MR=False element, there is no clear way of dealing
-        with N0 and dg, if the slicing is done on the dimensions related to N. 
-        -> Maybe not allow this option? Or try to protect it?
-            
+        of an instance.
         """
-        
-        
-        return data
+        new = self.copy(empty=True)
 
+        if self.MR:
+            if not isinstance(self.array, list):
+                raise ValueError("MR=True but array is not a list.")
+
+            if isinstance(key, (int, slice)):
+                new.array = self.array[key]
+                new.list_dg = self.list_dg[key] if self.list_dg is not None else None
+
+                # If a single element is selected, keep MR=True with a single resolution
+                if isinstance(key, int):
+                    new.array = [new.array]
+                    new.list_dg = [new.list_dg]
+            else:
+                raise TypeError("Indexing MR=True data only supports int or slice.")
+        else:
+            new.array = self.array[key]
+
+        return new
+  
+    @staticmethod
+    def _downsample_tensor(x: torch.Tensor, dg_inc: int) -> torch.Tensor:
+        """
+        Downsample a tensor by a factor 2**dg_inc along the last two
+        dimensions using average pooling.
+
+        Requires that both spatial dimensions be divisible by 2**dg_inc.
+        """
+        if dg_inc < 0:
+            raise ValueError("dg_inc must be non-negative")
+        if dg_inc == 0:
+            return x
+
+        scale = 2 ** dg_inc
+        H, W = x.shape[-2:]
+        if H % scale != 0 or W % scale != 0:
+            raise ValueError(
+                f"Cannot downsample from ({H},{W}) by 2^{dg_inc}: "
+                "dimensions must be divisible."
+            )
+
+        orig_shape = x.shape
+        x_flat = x.reshape(-1, 1, H, W)
+        y = F.avg_pool2d(x_flat, kernel_size=(scale, scale), stride=(scale, scale))
+        H2, W2 = H // scale, W // scale
+        y = y.reshape(*orig_shape[:-2], H2, W2)
+        return y
   
     ###########################################################################
     def downsample_toMR_Mask(self, dg_max):
         '''
         Take a mask given at a dg=0 resolution, and put it at all resolutions
-        from dg=0 to dg=dg_max, in a MR=True StlData.
-        
-        The input map should only contains real positive values, describing the
-        relative weight of each pixel.
-        
-        Parameters
-        ----------
-        - self : StlData with MR=False
-            Mask, should have dg=0 and Fourier=False.
-            Can be batched
-        - dg_max : maximum downsampling
-            
-        Return
-        ----------
-        - mask_MR : StlData with MR=True 
-            Multi-resolution masks, with list_dg = range(dg_max + 1)
-            Is of unit mean at each dg resolution.
-            Can be batched
-            
-        To do and remark
-        ----------
-        - Should we impose that the output mask at each dg resolution should be
-        of unit mean? While this is important for mean and cov, and could be 
-        imposed when preparing the mask for the scattering operator, it has to 
-        be seen for the wavelet convolutions. Anyway, if such a condition is 
-        necessary, it should be imposed here for code efficiency.
+        from dg=0 to dg=dg_max, in a MR=True object.
+
+        Each resolution is normalized to have unit mean (over spatial dims).
         '''
-        
-            
+        if self.MR:
+            raise ValueError("downsample_toMR_Mask expects MR == False.")
+        if self.dg != 0:
+            raise ValueError("Mask should be at dg=0 to build a multi-resolution mask.")
+        if self.array is None:
+            raise ValueError("No array stored in this object.")
+
+        list_masks = []
+        list_dg = list(range(dg_max + 1))
+
+        for dg in list_dg:
+            if dg == 0:
+                m = self.array
+            else:
+                m = self._downsample_tensor(self.array, dg)
+
+            if (m < 0).any():
+                raise ValueError("Mask contains negative values; expected non-negative weights.")
+
+            mean = m.mean(dim=(-2, -1), keepdim=True)
+            m = m / mean.clamp_min(1e-12)
+            list_masks.append(m)
+
+        Mask_MR = self.copy(empty=True)
+        Mask_MR.MR = True
+        Mask_MR.dg = None
+        Mask_MR.list_dg = list_dg
+        Mask_MR.array = list_masks
+
         return Mask_MR
+
+    ###########################################################################
+    def _get_mask_at_dg(self, mask_MR, dg):
+        """Helper to pick the mask at a given dg from a MR mask object."""
+        if mask_MR is None:
+            return None
+        if not mask_MR.MR:
+            raise ValueError("mask_MR must have MR=True.")
+        if mask_MR.list_dg is None:
+            raise ValueError("mask_MR.list_dg is None.")
+        try:
+            idx = mask_MR.list_dg.index(dg)
+        except ValueError:
+            raise ValueError(f"Mask does not contain dg={dg}.")
+        return mask_MR.array[idx]
 
     ###########################################################################
     def downsample(self, dg_out, mask_MR=None, O_Fourier=None, copy=False):
         """
-        Downsample the data to the dg resolution.
-        Only supporte MR == False.
-        
-        A multi-resolution mask can be given, wih resolutions between dg=0 and 
-        at least dg_out.
-    
-        The output Fourier status can be specified via O_Fourier.
-        If not specified, it will be chosen for minimal computation cost
-        (depending on DT).
-    
-        Parameters
-        ----------
-        - dg_out : int
-            Target dg resolution.
-        - mask_MR : StlData with MR=True or None
-            Multi-resolution masks, requires list_dg = range(dg_max + 1)
-            Can be batched if dimensions match
-        - O_Fourier : bool or None
-            Desired Fourier status of output. 
-            If None, DT-dependent default is used.
-        - copy : bool
-            If True, return a new StlData instance; else modify in place.
-    
-        Returns
-        -------
-        data : StlData with MR=False
-            Downsampled data at dg=dg_out
+        Downsample the data to the dg_out resolution.
+        Only supports MR == False.
+
+        Downsampling is done in real space by average pooling, with factor
+        2^(dg_out - dg) on both spatial axes.
         """
-    
-    
+        if self.MR:
+            raise ValueError("downsample only supports MR == False.")
+        if dg_out < 0:
+            raise ValueError("dg_out must be non-negative.")
+        if dg_out == self.dg and not copy:
+            return self
+        if dg_out < self.dg:
+            raise ValueError("Requested dg_out < current dg; upsampling not supported.")
+
+        data = self.copy(empty=False) if copy else self
+        dg_inc = dg_out - data.dg
+
+        if dg_inc > 0:
+            data.array = self._downsample_tensor(data.array, dg_inc)
+            data.dg = dg_out
+
+        # Optionally apply a mask at the target resolution (simple multiplicative mask)
+        if mask_MR is not None:
+            mask = self._get_mask_at_dg(mask_MR, data.dg)
+            if mask.shape[-2:] != data.array.shape[-2:]:
+                raise ValueError("Mask and data have incompatible spatial shapes.")
+            data.array = data.array * mask
+
         return data
     
     ###########################################################################
-    def downsample_toMR(self, dg_max, mask_MR=None,
-                        O_Fourier=None):
+    def downsample_toMR(self, dg_max, mask_MR=None, O_Fourier=None):
         """
-        Generate a MR (multi-resolution) StlData object by downsampling the 
-        current (single-resolution) data to a list of target resolutions.
-        
-        Downsample the data to all resolutions between dg=0 to dg_max.
-        Only supporte MR=False, and the output is a MR=True array.
-        
-        A multi-resolution mask can be given, wih resolutions between dg=0 and 
-        at least dg_max.
-    
-        The output Fourier status can be specified via O_Fourier.
-        If not specified, it will be chosen for minimal computation cost
-        (depending on DT).
-    
-        Parameters
-        ----------
-        - dg_max : int
-            Maximum dg resolution to reach
-        - mask_MR : StlData with MR=True or None
-            Multi-resolution masks, requires list_dg = range(dg_max + 1)
-            Can be batched if dimensions match
-        - O_Fourier : bool or None
-            Desired Fourier status of output. 
-            If None, DT-dependent default is used.
-            
-        Returns
-        -------
-        data : StlData with MR=True
-            Downsampled data between dg=0 and dg_max
+        Generate a MR (multi-resolution) object by downsampling the current
+        (single-resolution) data to all resolutions between dg=0 and dg_max.
+
+        Only supports MR=False and assumes current dg==0.
         """
-    
+        if self.MR:
+            raise ValueError("downsample_toMR expects MR == False.")
+        if self.dg != 0:
+            raise ValueError("downsample_toMR assumes current data is at dg=0.")
+        if dg_max < 0:
+            raise ValueError("dg_max must be non-negative.")
+        if self.array is None:
+            raise ValueError("No array stored in this object.")
+
+        list_arrays = []
+        list_dg = list(range(dg_max + 1))
+
+        for dg in list_dg:
+            if dg == 0:
+                arr = self.array
+            else:
+                arr = self._downsample_tensor(self.array, dg)
+
+            if mask_MR is not None:
+                mask = self._get_mask_at_dg(mask_MR, dg)
+                if mask.shape[-2:] != arr.shape[-2:]:
+                    raise ValueError(f"Mask and data have incompatible shapes at dg={dg}.")
+                arr = arr * mask
+
+            list_arrays.append(arr)
+
+        data = self.copy(empty=True)
+        data.MR = True
+        data.dg = None
+        data.list_dg = list_dg
+        data.array = list_arrays
+
         return data
     
     ###########################################################################
     def downsample_fromMR(self, Nout, O_Fourier=None):
         """
-        Not up to date.
-        Will be updated if necessary.
-        
-        Convert an MR==True StlData object to MR==False at at Nout.
-    
+        Convert an MR==True object to MR==False at resolution Nout.
+
         Each resolution in the current MR list is downsampled to Nout and then
-        stacked into a single array of shape (..., len(listN), *Nout).
-    
-        Parameters
-        ----------
-        - Nout : tuple
-            Target resolution for the final single-resolution data.
-        - O_Fourier : bool or None
-            Desired Fourier status of output. 
-            If None, DT-dependent default is used.
-    
-        Returns
-        -------
-        data : StlData
-            A new MR == False StlData object with stacked downsampled data.
-    
+        stacked into a single array of shape (..., len(list_dg), *Nout).
         """
-    
-        
+        if not self.MR:
+            raise ValueError("downsample_fromMR expects MR == True.")
+        if self.array is None or len(self.array) == 0:
+            raise ValueError("No data stored in this MR object.")
+        if not isinstance(Nout, (tuple, list)) or len(Nout) != 2:
+            raise ValueError("Nout must be a tuple (Nx_out, Ny_out).")
+
+        Nx_out, Ny_out = Nout
+        out_list = []
+
+        for arr in self.array:
+            H, W = arr.shape[-2:]
+            if (H, W) == (Nx_out, Ny_out):
+                y = arr
+            else:
+                if H % Nx_out != 0 or W % Ny_out != 0:
+                    raise ValueError(f"Cannot downsample from ({H},{W}) to ({Nx_out},{Ny_out}).")
+                factor_x = H // Nx_out
+                factor_y = W // Ny_out
+                if factor_x != factor_y:
+                    raise ValueError("Anisotropic downsampling is not supported in downsample_fromMR.")
+                dg_inc = int(round(math.log2(factor_x)))
+                if 2 ** dg_inc != factor_x:
+                    raise ValueError("Downsampling factor must be a power of 2.")
+                y = self._downsample_tensor(arr, dg_inc)
+            out_list.append(y)
+
+        # stack along a new dimension before spatial dims
+        stacked = torch.stack(out_list, dim=-3)
+
+        data = self.copy(empty=True)
+        data.MR = False
+        data.array = stacked
+
+        # infer dg from N0 and Nout if possible
+        if self.N0 is not None:
+            scale_x = self.N0[0] // Nx_out
+            if scale_x > 0 and 2 ** int(round(math.log2(scale_x))) == scale_x:
+                data.dg = int(round(math.log2(scale_x)))
+            else:
+                data.dg = None
+        else:
+            data.dg = None
+        data.list_dg = None
+
         return data
     
     ###########################################################################
     def modulus_func(self, copy=False):
         """
         Compute the modulus (absolute value) of the data.
-        Automatically transforms to real space if needed.
-        
-        Parameters
-        ----------
-        copy : bool
-            If True, returns a new StlData instance.
         """
-        
-                    
+        data = self.copy(empty=False) if copy else self
+
+        if data.MR:
+            data.array = [torch.abs(a) for a in data.array]
+        else:
+            data.array = torch.abs(data.array)
+
         return data
         
     ###########################################################################
     def mean_func(self, square=False, mask_MR=None):
         '''
-        Compute the mean of an StlData instance on the tuple N last dimensions.
-        Mean is computed in real-space, and iFourier is applied if necessary.
-        
-        If MR=True, the mean will be computed on the data at each resolution, 
-        and put in a additional dimension of size len(list_dg) at the end.
-        -> this requires that all element of the StlData objects have same
-        dimension but the N ones.
-        
-        A multi-resolution mask can be given, wih resolutions between dg=0 and 
-        at least dg_max. 
-        -> At each resolution, the mask should be of unit mean, to allow for a
-        proper weighting of the mean.
-        
-        A quadratic mean |x|^2 is computed if square = True.
+        Compute the mean on the last two dimensions (Nx, Ny).
 
-        Parameters
-        ----------
-        - square : bool
-            True if quadratic mean
-        - mask_MR : StlData with MR=True or None
-            Multi-resolution masks, requires list_dg = range(dg_max + 1).
-            Should be of unit mean at each dg resolution.
-            Can be batched if dimensions match
-            
-        Output 
-        ----------
-        - mean : array (...)  
-            mean of data on last dim N
-            
-        Remark 
-        ----------
-        - The computation of the mean in real space could be done directly in 
-        Fourier space if necessary (k=0 value), if there is no mask. But I am
-        not sure that this use actually appears.
-        - The fact that the mask is of unit mean is required, in order not to 
-        compute again this mean at each call of the function.
-        '''    
-        
-                    
+        If MR=True, the mean is computed for each resolution and stacked in
+        an additional last dimension of size len(list_dg).
+
+        If a multi-resolution mask is given, it is assumed to have unit mean
+        at each resolution (as enforced by downsample_toMR_Mask), so the mean
+        is computed as mean(x * mask).
+        '''
+        if self.MR:
+            means = []
+            for arr, dg in zip(self.array, self.list_dg):
+                arr_use = torch.abs(arr) ** 2 if square else arr
+                dims = (-2, -1)
+                if mask_MR is not None:
+                    mask = self._get_mask_at_dg(mask_MR, dg)
+                    mean = (arr_use * mask).mean(dim=dims)
+                else:
+                    mean = arr_use.mean(dim=dims)
+                means.append(mean)
+            mean = torch.stack(means, dim=-1)
+        else:
+            if self.array is None:
+                raise ValueError("No data stored in this object.")
+            arr_use = torch.abs(self.array) ** 2 if square else self.array
+            dims = (-2, -1)
+            if mask_MR is not None:
+                mask = self._get_mask_at_dg(mask_MR, self.dg)
+                mean = (arr_use * mask).mean(dim=dims)
+            else:
+                mean = arr_use.mean(dim=dims)
+
         return mean
         
     ###########################################################################
     def cov_func(self, data2=None, mask_MR=None, remove_mean=False):
         """
-        Compute the covariance between data1=self and data2 on the tuple N 
-        last dimension.
-        
-        Notes:
-        - Only works when MR == False. Raises an error otherwise.
-        - Resolutions dg of data1 and data2 must match.
-        - Automatically handles Fourier vs real space, depending on DT.
-        
-        A multi-resolution mask can be given, wih resolutions between dg=0 and 
-        at least dg_max. 
-        -> At each resolution, the mask should be of unit mean, to allow for a
-        proper weighting of the mean.
-        
-        -> Depending on the data type (DT), the covariance can be computed in 
-        real space, Fourier space, or both (e.g., using Plancherel's theorem 
-        for 2D planar data). The function applies the appropriate transform 
-        if needed. If a mask is provided, the computation is always performed 
-        in real space.
-                
-        Parameters
-        ----------
-        - data2 : StlData with MR=False or None
-            Second data. Auto-covariance of self is computed if None.
-        - mask_MR : StlData with MR=True or None
-            Multi-resolution masks, requires list_dg = range(dg_max + 1).
-            Should be of unit mean at each dg resolution.
-            Can be batched if dimensions match
-        - remove_mean : bool
-            If mean should be explicitely removed. 
-    
-        Returns
-        -------
-        - cov : array (...)
-            Covariance value.
-            
-        Remark and to do
-        -------
-        - This function estimate the covariance without removing the mean of 
-        each component. This is sufficient when at least one of the component
-        is of zero mean, which is usually the case when computing ST
-        statistics, and save a lot of computations.
-        -> I added an option if mean should be explicitly removed, if this 
-        appears to be relevant at some point.
-        -> Technically, it could be better to remove the mean when we work
-        with masked data, of with non-pbc. However, I think that not computing
-        it could still be a good compromise.
-        - The fact that the mask is of unit mean is required, in order not to 
-        compute again this mean at each call of the function.
-            
+        Compute the covariance between data1=self and data2 on the last two
+        dimensions (Nx, Ny).
+
+        Only works when MR == False.
         """
-        
-        return cov
-        
+        if self.MR:
+            raise ValueError("cov_func currently supports only MR == False.")
+
+        x = self.array
+        if data2 is None:
+            y = x
+        else:
+            if not isinstance(data2, Planar2D_kernel_torch):
+                raise TypeError("data2 must be a Planar2D_kernel_torch instance.")
+            if data2.MR:
+                raise ValueError("data2 must have MR == False.")
+            if data2.dg != self.dg:
+                raise ValueError("data2 must have the same dg as self.")
+            y = data2.array
+
+        dims = (-2, -1)
+
+        if mask_MR is not None:
+            mask = self._get_mask_at_dg(mask_MR, self.dg)
+            if remove_mean:
+                mx = (x * mask).mean(dim=dims, keepdim=True)
+                my = (y * mask).mean(dim=dims, keepdim=True)
+                x_c = x - mx
+                y_c = y - my
+            else:
+                x_c = x
+                y_c = y
+            cov = (x_c * y_c * mask).mean(dim=dims)
+        else:
+            if remove_mean:
+                mx = x.mean(dim=dims, keepdim=True)
+                my = y.mean(dim=dims, keepdim=True)
+                x_c = x - mx
+                y_c = y - my
+            else:
+                x_c = x
+                y_c = y
+            cov = (x_c * y_c).mean(dim=dims)
+            
+        return cov        
        
     def get_wavelet_op(self,kernel_size=5,L=4):
         
