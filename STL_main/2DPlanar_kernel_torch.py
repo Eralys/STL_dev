@@ -96,7 +96,7 @@ class 2DPlanar_kernel_torch:
             raise ValueError("Only single resolution array are accepted.")
         
         # Main 
-        self.DT = DT
+        
         self.MR = False
         self.dg = 0
         self.N0 = N0
@@ -108,30 +108,31 @@ class 2DPlanar_kernel_torch:
         self.array = to_array(array)
         
         # Find N0 value
-        findN = {"DT1": DT1_findN, "DT2": DT2_findN}.get(self.DT)
-        if N0==None:
-            self.N0 = findN(self.array, self.Fourier)
         
+        self.device='cuda'
+        self.dtype=torch.float
+        self.smooth_kernel=self._smooth_kernel(3)
         
-        self.smooth_kernel=_smooth_kernel(3)
-        
-    def _smooth_kernel(kernel_size: int):
+    def _smooth_kernel(self,kernel_size: int):
         """Create a 2D Gaussian kernel."""
         sigma=1
         # 1D coordinate grid centered at 0
-        coords = torch.arange(kernel_size, device=device, dtype=dtype) - (kernel_size - 1) / 2.0
+        coords = torch.arange(kernel_size, device=self.device, dtype=self.dtype) - (kernel_size - 1) / 2.0
         yy, xx = torch.meshgrid(coords, coords, indexing="ij")
         kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
         kernel = kernel / kernel.sum()
         return kernel
             
-    def _wavelet_kernel(kernel_size: int,n_orientation: int):
+    def _wavelet_kernel(self,kernel_size: int,n_orientation: int,sigma=1):
         """Create a 2D Gaussian kernel."""
         # 1D coordinate grid centered at 0
-        coords = torch.arange(kernel_size, device=device, dtype=dtype) - (kernel_size - 1) / 2.0
+        coords = torch.arange(kernel_size, device=self.device, dtype=self.dtype) - (kernel_size - 1) / 2.0
         yy, xx = torch.meshgrid(coords, coords, indexing="ij")
-        kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
-        kernel = kernel / kernel.sum()
+        mother_kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))[None,:,:]
+        angles=torch.arange(n_orientation, device=self.device, dtype=self.dtype)/n_orientation*np.pi
+        angles_proj=np.pi*(xx[None,...]*np.cos(angles[:,None,None])+yy[None,...]*np.sin(angles[:,None,None]))
+        kernel = torch.complex(np.cos(angles)*mother_kernel,np.sin(angles)*mother_kernel)
+        kernel = kernel / torch.sum(kernel.sum,dim=(1,2))
         return kernel
         
     ###########################################################################
@@ -440,9 +441,10 @@ class 2DPlanar_kernel_torch:
         return cov
         
         
-        def get_wavelet_op(self,J=None,L=None):
-            
-            return wop_class
+    def get_wavelet_op(self,J=None,L=None):
+        
+        
+        return wop_class
             
 
     
