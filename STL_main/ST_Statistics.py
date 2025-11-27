@@ -314,127 +314,158 @@ class ST_Statistics:
         return output 
         
     ########################################
-    def plot_coeff(self, b=0, c=0, figsize=(12, 10), cmap="viridis"):
+    def _to_np(self,x):
+        if isinstance(x, bk.Tensor):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
+
+
+    ########################################
+    def plot_coeff(self, b=0, c=0, hold=False, color=None, figsize=(16, 12)):
         """
-        Plot scattering covariance coefficients S1, S2, S3, S4
-        in a 2x2 figure (one quadrant per S).
+        Plot scattering covariance coefficients as curves.
 
         Parameters
         ----------
         b : int
-            Batch index to visualize (0 <= b < Nb).
+            Batch index.
         c : int
-            Channel index to visualize (0 <= c < Nc).
+            Channel index.
+        hold : bool
+            If False, clear the figure before plotting new curves.
+        color : str or None
+            Color for curves (matplotlib format).
         figsize : tuple
-            Size of the matplotlib figure.
-        cmap : str
-            Matplotlib colormap name.
+            Size of figure when hold=False.
 
-        Notes
-        -----
-        Shapes used (for SC == "ScatCov") are assumed to be:
-          - S1, S2 : (Nb, Nc, J, L)
-          - S3     : (Nb, Nc, J, J, L, L)
-          - S4     : (Nb, Nc, J, J, J, L, L, L)
-        For S3 and S4, we aggregate over all orientation indices L
-        (and over j3 for S4) to obtain a 2D map in (j1, j2).
+        Behavior
+        --------
+        - S1(j,l) : one curve per orientation l.
+        - S2(j,l) : one curve per orientation l.
+        - S3(j1,j2,l1,l2) :
+             * Panel per (l1,l2)
+             * For each panel: x=j1, curves for each j2.
+        - S4(j1,j2,j3,l1,l2,l3) :
+             * Panel per (l1,l2,l3)
+             * For each panel: x=j1, curves for each j2 and j3 fixed.
         """
 
-        if self.SC != "ScatCov":
-            raise ValueError("plot_coeff currently implemented for SC == 'ScatCov' only.")
+        if not hold:
+            plt.figure(figsize=figsize)
+            plt.clf()
 
         Nb, Nc, J, L = self.Nb, self.Nc, self.J, self.L
-        if not (0 <= b < Nb):
-            raise IndexError(f"Batch index b={b} out of range [0,{Nb-1}]")
-        if not (0 <= c < Nc):
-            raise IndexError(f"Channel index c={c} out of range [0,{Nc-1}]")
+        if b >= Nb or c >= Nc:
+            raise IndexError("b or c index out of range.")
 
-        # Helper to move torch -> numpy safely
-        def to_np(x):
-            if isinstance(x, bk.Tensor):
-                return x.detach().cpu().numpy()
-            return np.asarray(x)
+        ###########################################################################
+        # -----------  S1 : (J, L)  ----------- #
+        ###########################################################################
+        if hasattr(self, "S1") and self.S1 is not None:
+            S1 = self._to_np(self.S1[b, c])  # (J, L)
 
-        fig, axes = plt.subplots(2, 2, figsize=figsize)
+            plt.subplot(2, 2, 1)
+            for l in range(L):
+                y = S1[:, l]
+                mask = ~np.isnan(y)
+                if np.any(mask):
+                    plt.plot(np.arange(J)[mask], y[mask], color=color, label=f"L={l}")
+            plt.title("S1(j1,l)")
+            plt.xlabel("j1")
+            plt.ylabel("S1")
+            plt.grid(True)
+            plt.legend()
 
-        # ---------- S1 : (J, L) ----------
-        if getattr(self, "S1", None) is not None:
-            S1_bc = to_np(self.S1[b, c])      # (J, L)
-            im1 = axes[0, 0].imshow(
-                S1_bc,
-                origin="lower",
-                aspect="auto",
-                cmap=cmap
-            )
-            axes[0, 0].set_title("S1(j1, l)")
-            axes[0, 0].set_xlabel("l")
-            axes[0, 0].set_ylabel("j1")
-            fig.colorbar(im1, ax=axes[0, 0])
-        else:
-            axes[0, 0].set_visible(False)
+        ###########################################################################
+        # -----------  S2 : (J, L)  ----------- #
+        ###########################################################################
+        if hasattr(self, "S2") and self.S2 is not None:
+            S2 = self._to_np(self.S2[b, c])  # (J, L)
 
-        # ---------- S2 : (J, L) ----------
-        if getattr(self, "S2", None) is not None:
-            S2_bc = to_np(self.S2[b, c])      # (J, L)
-            im2 = axes[0, 1].imshow(
-                S2_bc,
-                origin="lower",
-                aspect="auto",
-                cmap=cmap
-            )
-            axes[0, 1].set_title("S2(j1, l)")
-            axes[0, 1].set_xlabel("l")
-            axes[0, 1].set_ylabel("j1")
-            fig.colorbar(im2, ax=axes[0, 1])
-        else:
-            axes[0, 1].set_visible(False)
+            plt.subplot(2, 2, 2)
+            for l in range(L):
+                y = S2[:, l]
+                mask = ~np.isnan(y)
+                if np.any(mask):
+                    plt.plot(np.arange(J)[mask], y[mask], color=color, label=f"L={l}")
+            plt.title("S2(j1,l)")
+            plt.xlabel("j1")
+            plt.ylabel("S2")
+            plt.grid(True)
+            plt.legend()
 
-        # ---------- S3 : (J, J, L, L) -> (J, J) ----------
-        if getattr(self, "S3", None) is not None:
-            S3_bc = to_np(self.S3[b, c])      # (J, J, L, L)
-            # Aggregate over all orientations (L1,L2)
-            # and ignore NaNs
-            with np.errstate(invalid="ignore"):
-                S3_mag = np.abs(S3_bc)
-                S3_jj = np.nanmean(np.nanmean(S3_mag, axis=-1), axis=-1)  # (J, J)
+        ###########################################################################
+        # -----------  S3 : (J,J,L,L)  ----------- #
+        ###########################################################################
+        if hasattr(self, "S3") and self.S3 is not None:
+            S3 = self._to_np(self.S3[b, c])  # (J, J, L, L)
 
-            im3 = axes[1, 0].imshow(
-                S3_jj,
-                origin="lower",
-                aspect="auto",
-                cmap=cmap
-            )
-            axes[1, 0].set_title("S3(j1, j2)  (avg over L1,L2)")
-            axes[1, 0].set_xlabel("j2")
-            axes[1, 0].set_ylabel("j1")
-            fig.colorbar(im3, ax=axes[1, 0])
-        else:
-            axes[1, 0].set_visible(False)
+            # On ouvre une figure dédiée pour S3 si hold=False (car beaucoup de panels)
+            if not hold:
+                fig3 = plt.figure(figsize=(14, 10))
+                fig3.suptitle("S3(j1,j2,l1,l2)")
 
-        # ---------- S4 : (J, J, J, L, L, L) -> (J, J) ----------
-        if getattr(self, "S4", None) is not None:
-            S4_bc = to_np(self.S4[b, c])      # (J, J, J, L, L, L)
-            # Aggregate over j3 and over all orientations (L1,L2,L3)
-            with np.errstate(invalid="ignore"):
-                S4_mag = np.abs(S4_bc)
-                # axes: j1, j2, j3, l1, l2, l3 -> keep j1,j2
-                S4_jj = np.nanmean(
-                    S4_mag,
-                    axis=(2, 3, 4, 5)
-                )  # (J, J)
+            panel = 1
+            for l1 in range(L):
+                for l2 in range(L):
+                    if not hold:
+                        plt.subplot(L, L, panel)
+                    panel += 1
 
-            im4 = axes[1, 1].imshow(
-                S4_jj,
-                origin="lower",
-                aspect="auto",
-                cmap=cmap
-            )
-            axes[1, 1].set_title("S4(j1, j2)  (avg over j3,L1,L2,L3)")
-            axes[1, 1].set_xlabel("j2")
-            axes[1, 1].set_ylabel("j1")
-            fig.colorbar(im4, ax=axes[1, 1])
-        else:
-            axes[1, 1].set_visible(False)
+                    # S3[j1, j2] (fix l1,l2)
+                    S = S3[:, :, l1, l2]  # shape (J,J)
 
-        plt.tight_layout()
-        plt.show()
+                    for j2 in range(J):
+                        y = S[:, j2]
+                        mask = ~np.isnan(y)
+                        if np.any(mask):
+                            plt.plot(np.arange(J)[mask], y[mask],
+                                     color=color, label=f"j2={j2}")
+
+                    if not hold:
+                        plt.title(f"S3 l1={l1}, l2={l2}")
+                        plt.xlabel("j1")
+                        plt.ylabel("coef")
+                        plt.grid(True)
+                        # (pas de légende pour éviter surcharge visuelle)
+
+        ###########################################################################
+        # -----------  S4 : (J,J,J,L,L,L)  ----------- #
+        ###########################################################################
+        if hasattr(self, "S4") and self.S4 is not None:
+            S4 = self._to_np(self.S4[b, c])  # (J, J, J, L, L, L)
+
+            # Figure dédiée
+            if not hold:
+                fig4 = plt.figure(figsize=(16, 12))
+                fig4.suptitle("S4(j1,j2,j3,l1,l2,l3)")
+
+            panel = 1
+            for l1 in range(L):
+                for l2 in range(L):
+                    for l3 in range(L):
+                        # trop de sous-graphiques si L grand : à ton goût !
+                        if not hold:
+                            plt.subplot(L**2, L, panel)
+                        panel += 1
+
+                        # S4[j1,j2,j3,l1,l2,l3]
+                        S = S4[:, :, :, l1, l2, l3]  # (J,J,J)
+
+                        for j2 in range(J):
+                            for j3 in range(J):
+                                y = S[:, j2, j3]
+                                mask = ~np.isnan(y)
+                                if np.any(mask):
+                                    plt.plot(np.arange(J)[mask], y[mask],
+                                             color=color)
+
+                        if not hold:
+                            plt.title(f"S4 l1={l1},l2={l2},l3={l3}")
+                            plt.xlabel("j1")
+                            plt.ylabel("coef")
+                            plt.grid(True)
+
+        if not hold:
+            plt.tight_layout()
+            plt.show()
