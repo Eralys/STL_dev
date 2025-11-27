@@ -22,7 +22,7 @@ from SphericalStencil import SphericalStencil   # adapt if needed
 
 
 ###############################################################################
-class STLHealpixKernel:
+class STL_Healpix_Kernel_Torch:
     """
     HEALPix analogue of STL2DKernel.
 
@@ -163,7 +163,7 @@ class STLHealpixKernel:
     ###########################################################################
     def copy(self, empty=False):
         """
-        Copy a STLHealpixKernel instance.
+        Copy a STL_Healpix_Kernel_Torch instance.
 
         Parameters
         ----------
@@ -172,10 +172,10 @@ class STLHealpixKernel:
 
         Returns
         -------
-        STLHealpixKernel
+        STL_Healpix_Kernel_Torch
             Shallow copy of metadata + (optionally) arrays.
         """
-        new = object.__new__(STLHealpixKernel)
+        new = object.__new__(STL_Healpix_Kernel_Torch)
 
         # Copy metadata
         new.DT = self.DT
@@ -230,7 +230,7 @@ class STLHealpixKernel:
         return new
 
     ###########################################################################
-    def modulus_func(self, copy=False):
+    def modulus(self, copy=False):
         """
         Compute the modulus (absolute value) of the data.
 
@@ -247,7 +247,7 @@ class STLHealpixKernel:
         return data
 
     ###########################################################################
-    def mean_func(self, square=False):
+    def mean(self, square=False):
         """
         Compute the mean over the last (pixel) dimension.
 
@@ -275,7 +275,7 @@ class STLHealpixKernel:
             return arr_use.mean(dim=-1)
 
     ###########################################################################
-    def cov_func(self, data2=None, remove_mean=False):
+    def cov(self, data2=None, remove_mean=False):
         """
         Compute covariance along the pixel axis between self and data2.
 
@@ -283,7 +283,7 @@ class STLHealpixKernel:
 
         Parameters
         ----------
-        data2 : STLHealpixKernel or None
+        data2 : STL_Healpix_Kernel_Torch or None
             If None, compute auto-covariance of self.
         remove_mean : bool
             If True, subtract the mean before multiplying.
@@ -294,14 +294,14 @@ class STLHealpixKernel:
             Covariance values over the last dimension.
         """
         if self.MR:
-            raise ValueError("cov_func currently supports only MR == False.")
+            raise ValueError("cov currently supports only MR == False.")
 
         x = self.array
         if data2 is None:
             y = x
         else:
-            if not isinstance(data2, STLHealpixKernel):
-                raise TypeError("data2 must be a STLHealpixKernel instance.")
+            if not isinstance(data2, STL_Healpix_Kernel_Torch):
+                raise TypeError("data2 must be a STL_Healpix_Kernel_Torch instance.")
             if data2.MR:
                 raise ValueError("data2 must have MR == False.")
             if data2.dg != self.dg:
@@ -408,7 +408,7 @@ class STLHealpixKernel:
 
         Returns
         -------
-        STLHealpixKernel
+        STL_Healpix_Kernel_Torch
             Data at the desired dg_out resolution.
         """
         if self.MR:
@@ -590,13 +590,13 @@ class WavelateOperatorHealpixKernel_torch:
     def get_L(self):
         return self.L
 
-    def apply(self, data: STLHealpixKernel, j: int):
+    def apply(self, data: STL_Healpix_Kernel_Torch, j: int):
         """
-        Apply the wavelet convolution to a STLHealpixKernel instance.
+        Apply the wavelet convolution to a STL_Healpix_Kernel_Torch instance.
 
         Parameters
         ----------
-        data : STLHealpixKernel
+        data : STL_Healpix_Kernel_Torch
             Input Healpix data with array of shape [..., K] and cell_ids aligned.
             Must be at downgrading level dg == j.
         j : int
@@ -604,7 +604,7 @@ class WavelateOperatorHealpixKernel_torch:
 
         Returns
         -------
-        STLHealpixKernel
+        STL_Healpix_Kernel_Torch
             New object with array shape [..., L, K], same nside & cell_ids.
         """
         if j != data.dg:
@@ -640,7 +640,7 @@ class WavelateOperatorHealpixKernel_torch:
         _, L, K_out = y_bc.shape
         y = y_bc.reshape(*leading, L, K_out)  # [..., L, K]
 
-        # Wrap into a new STLHealpixKernel (same nside, same cell_ids, same dg)
+        # Wrap into a new STL_Healpix_Kernel_Torch (same nside, same cell_ids, same dg)
         out = data.copy(empty=True)
         out.MR = False
         out.array = y

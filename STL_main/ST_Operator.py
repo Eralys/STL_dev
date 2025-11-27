@@ -6,8 +6,6 @@ Tentative proposal by EA
 """
 
 import numpy as np
-#from StlData import StlData
-#from WaveletTransform import Wavelet_Operator
 from ST_Statistics import ST_Statistics
 import torch as bk # from_numpy, zeros, dim, shape, nan
                     

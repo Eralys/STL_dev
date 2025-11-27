@@ -22,15 +22,15 @@ import torch.nn.functional as F
 
 ###############################################################################
 ###############################################################################
-class STL2DKernel:
+class STL_2D_Kernel_Torch:
     '''
     Class which contain the different types of data used in STL.
     Store important parameters, such as DT, N0, and the Fourier type.
     Also allow to convert from numpy to pytorch (or other type).
     Allow to transfer internally these parameters.
     
-    Has different standard functions as methods (fourier_func, fourier_func, 
-    out_fourier, modulus, mean_func, cov_func, downsample)
+    Has different standard functions as methods (
+    modulus, mean, cov, downsample)
     
     The initial resolution N0 is fixed, but the maps can be downgraded. The 
     downgrading factor is the power of 2 that is used. A map of initial 
@@ -52,9 +52,7 @@ class STL2DKernel:
         with the same dimensions excepts N.
      
     Method usages if MR=True.
-        - fourier_func, fourier_func, out_fourier and modulus_func are applied 
-          to each array of the list.
-        - mean_func, cov_func give a single vector or last dim len(list_N)
+        - mean, cov give a single vector or last dim len(list_N)
         - downsample gives an output of size (..., len(list_N), Nout). Only 
           possible if all resolution are downsampled this way.
           
@@ -77,13 +75,21 @@ class STL2DKernel:
     - array : array (..., N) if MR==False
           liste of (..., N1), (..., N2), etc. if MR==True
           array(s) to store
-    - Fourier : bool
-         if data is in Fourier
          
     '''
     
+    #smooth kernel coded
+    # x,y=np.meshgrid(np.arange(5)-2,np.arange(5)-2)
+    # sigma=1.0
+    # np.exp(-(x**2+y**2)/(2*sigma**2))
+    smooth_kernel = np.array([[0.01831564, 0.082085  , 0.13533528, 0.082085  , 0.01831564],
+                            [0.082085  , 0.36787944, 0.60653066, 0.36787944, 0.082085  ],
+                            [0.13533528, 0.60653066, 1.        , 0.60653066, 0.13533528],
+                            [0.082085  , 0.36787944, 0.60653066, 0.36787944, 0.082085  ],
+                            [0.01831564, 0.082085  , 0.13533528, 0.082085  , 0.01831564]])
+                                     
     ###########################################################################
-    def __init__(self, array, smooth_kernel=None,dg=None,N0=None):
+    def __init__(self, array):
         '''
         Constructor, see details above. Frontend version, which assume the 
         array is at N0 resolution with dg=0, with MR=False.
@@ -116,22 +122,9 @@ class STL2DKernel:
         self.device=self.array.device
         self.dtype=self.array.dtype
         
-        if smooth_kernel is None:
-            smooth_kernel=self._smooth_kernel(3)
-        self.smooth_kernel=smooth_kernel
-        
-        
-    def _smooth_kernel(self,kernel_size: int):
-        """Create a 2D Gaussian kernel."""
-        sigma=1
-        # 1D coordinate grid centered at 0
-        coords = torch.arange(kernel_size, device=self.device, dtype=self.dtype) - (kernel_size - 1) / 2.0
-        yy, xx = torch.meshgrid(coords, coords, indexing="ij")
-        kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
-        kernel = kernel / kernel.sum()
-        return kernel
             
     ###########################################################################
+    @staticmethod
     def to_array(self,array):
         """
         Transform input array (NumPy or PyTorch) into a PyTorch tensor.
@@ -163,7 +156,7 @@ class STL2DKernel:
     ###########################################################################
     def copy(self, empty=False):
         """
-        Copy a STL2DKernel instance.
+        Copy a STL_2D_Kernel_Torch instance.
         Array is put to None if empty==True.
         
         Parameters
@@ -173,10 +166,10 @@ class STL2DKernel:
                     
         Output 
         ----------
-        - STL2DKernel
+        - STL_2D_Kernel_Torch
            copy of self
         """
-        new = object.__new__(STL2DKernel)
+        new = object.__new__(STL_2D_Kernel_Torch)
 
         # Copy metadata
         new.MR = self.MR
@@ -446,7 +439,7 @@ class STL2DKernel:
         return data
     
     ###########################################################################
-    def modulus_func(self, copy=False):
+    def modulus(self, copy=False):
         """
         Compute the modulus (absolute value) of the data.
         """
@@ -462,7 +455,7 @@ class STL2DKernel:
         return data
         
     ###########################################################################
-    def mean_func(self, square=False, mask_MR=None):
+    def mean(self, square=False, mask_MR=None):
         '''
         Compute the mean on the last two dimensions (Nx, Ny).
 
@@ -499,7 +492,7 @@ class STL2DKernel:
         return mean
         
     ###########################################################################
-    def cov_func(self, data2=None, mask_MR=None, remove_mean=False):
+    def cov(self, data2=None, mask_MR=None, remove_mean=False):
         """
         Compute the covariance between data1=self and data2 on the last two
         dimensions (Nx, Ny).
@@ -507,13 +500,13 @@ class STL2DKernel:
         Only works when MR == False.
         """
         if self.MR:
-            raise ValueError("cov_func currently supports only MR == False.")
+            raise ValueError("cov currently supports only MR == False.")
 
         x = self.array
         if data2 is None:
             y = x
         else:
-            if not isinstance(data2, STL2DKernel):
+            if not isinstance(data2, STL_2D_Kernel_Torch):
                 raise TypeError("data2 must be a Planar2D_kernel_torch instance.")
             if data2.MR:
                 raise ValueError("data2 must have MR == False.")
@@ -547,7 +540,7 @@ class STL2DKernel:
             
         return cov        
        
-    def get_wavelet_op(self,kernel_size=None,L=None,J=None):
+    def get_wavelet_op(self, kernel_size=None,L=None,J=None):
         
         if L is None:
             L=4
@@ -667,5 +660,8 @@ class WavelateOperator2Dkernel_torch:
         new_shape = (*leading_dims, out_channels, Nx, Ny)
         cdata = y_4d.reshape(new_shape)
 
-        return STL2DKernel(cdata,smooth_kernel=data.smooth_kernel,dg=data.dg,N0=data.N0)
+        cdata = STL_2D_Kernel_Torch(cdata)
+        cdata.dg=data.dg
+        cdata.N0=data.N0
+        return cdata
         
