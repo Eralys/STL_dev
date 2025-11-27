@@ -423,22 +423,21 @@ def DT1_cov_func(array1, Fourier1, array2, Fourier2,
         
     if mask is None and Fourier1 and Fourier2:
         # Compute covariance (complex values)
-        cov =  torch.mean(array1 * array2.conj(), dim=(-2, -1)).real
+        cov =  torch.mean(array1 * array2.conj(), dim=(-2, -1))
 
     else:
-        # We pass everything to real space
         if Fourier1:
-            _array1 = torch.fft.ifft2(array1, norm="ortho").real
+            _array1 = torch.fft.ifft2(array1, norm="ortho")
         else:
             _array1 = array1
         if Fourier2:
-            _array2 = torch.fft.ifft2(array2, norm="ortho").real
+            _array2 = torch.fft.ifft2(array2, norm="ortho")
         else:
             _array2 = array2
         # Define mask
         mask = 1 if mask is None else mask
         # Compute covariance (complex values)
-        cov =  torch.mean(_array1 * _array2 * mask, dim=(-2, -1))
+        cov =  torch.mean(_array1 * _array2.conj() * mask, dim=(-2, -1))
 
             
     return cov
