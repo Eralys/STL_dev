@@ -119,7 +119,7 @@ class ST_Operator:
         self.N0 = data.N0
         
         # Wavelet transform and related parameters
-        self.wavelet_op = data.get_wavelet_op(J,L) #Wavelet_Operator(DT, N0, J, L, WType)
+        self.wavelet_op = data.get_wavelet_op(J=J, L=L) #Wavelet_Operator(DT, N0, J, L, WType)
         self.J = self.wavelet_op.J
         self.L = self.wavelet_op.L
         self.WType = self.wavelet_op.WType
