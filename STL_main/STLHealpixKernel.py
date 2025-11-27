@@ -499,7 +499,7 @@ class STLHealpixKernel:
         if kernel_size is None:
             kernel_size = 5
         if J is None:
-            J = int(np.log2(self.N0)) - 2
+            J = int(np.log2(self.N0))
 
         # We build a SphericalStencil at the current nside & cell_ids
         stencil = SphericalStencil(
