@@ -97,7 +97,16 @@ class ST_Operator:
                  pbc=True, mask=None, 
                  norm="S2", S2_ref=None, iso=False, 
                  angular_ft=False, scale_ft=False,
-                 flatten=False, mask_st=None):
+                 flatten=False,
+                 wavelet_array = None,
+                 wavelet_array_MR = None,
+                 dg_max = None,
+                 j_to_dg = None,
+                 Single_Kernel = None,
+                 mask_st=None,
+                 mask_opt = False,
+                 mask_MR = None
+                 ):
         '''
         Constructor, see details above.
         
@@ -131,6 +140,7 @@ class ST_Operator:
         self.scale_ft = scale_ft
         self.flatten = flatten
         self.mask_st = mask_st
+        self.mask_MR = mask_MR
         
         # Check mask coherence and construct MR mask if necessary
         self.mask_MR = None
@@ -320,7 +330,7 @@ class ST_Operator:
         data_st = ST_Statistics(self.DT, N0, J, L, WType,
                                 SC, jmin, jmax, dj,
                                 pbc, mask_MR if pass_mask else None,
-                                Nb, Nc,self.wavelet_op)
+                                Nb, Nc, self.wavelet_op)
             
         # Define the mask for conv computation if necessary
         if not pbc:

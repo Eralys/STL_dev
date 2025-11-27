@@ -91,7 +91,7 @@ class ST_Statistics:
                  DT, N0, J, L, WType,
                  SC, jmin, jmax, dj,
                  pbc, mask_MR,
-                 Nb, Nc,wavelet_op):
+                 Nb, Nc, wavelet_op):
         '''
         Constructor, see details above.
         '''
@@ -99,6 +99,9 @@ class ST_Statistics:
         # Main parameters
         self.DT = DT
         self.N0 = N0
+
+        # Wavelet operator
+        self.wavelet_op = wavelet_op
         
         # Wavelet transform related parameters
         self.wavelet_op=wavelet_op
