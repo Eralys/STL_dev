@@ -334,10 +334,12 @@ class ST_Operator:
         Nb, Nc = bk.shape(data.array, 0), bk.shape(data.array, 1)
         
         # Create a ST_statistics instance
-        data_st = ST_Statistics(self.DT, N0, J, L, WType,
-                                SC, jmin, jmax, dj,
-                                pbc, mask_MR if pass_mask else None,
-                                Nb, Nc, self.wavelet_op)
+        data_st = ST_Statistics(
+            self.DT, N0, J, L, WType,
+            SC, jmin, jmax, dj,
+            pbc, mask_MR if pass_mask else None,
+            Nb, Nc
+        )
         # Define the mask for conv computation if necessary
         if not pbc:
             mask_bc = self.construct_mask_bc(mask_MR)                   
