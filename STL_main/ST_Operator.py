@@ -6,7 +6,7 @@ Tentative proposal by EA
 """
 
 import numpy as np
-from copy import deepcopy
+from copy import deepcopy, copy
 from StlData import StlData
 from WaveletTransform import Wavelet_Operator
 from ST_Statistics import ST_Statistics
@@ -98,18 +98,12 @@ class ST_Operator:
     ########################################
     def __init__(self,
                  DT, N0, J=None, L=None, WType=None,
-                 SC="scat_cov", jmin=None, jmax=None, dj=None,
+                 SC="ScatCov", jmin=None, jmax=None, dj=None,
                  pbc=True, mask=None, 
                  norm="S2", S2_ref=None, iso=False, 
                  angular_ft=False, scale_ft=False,
                  flatten=False,
-                 wavelet_array = None,
-                 wavelet_array_MR = None,
-                 dg_max = None,
-                 j_to_dg = None,
-                 Single_Kernel = None,
                  mask_st=None,
-                 mask_opt = False,
                  mask_MR = None
                  ):
         '''
@@ -393,8 +387,8 @@ class ST_Operator:
             # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
             # data_l1.array = data_l1.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
             # data_l1m.array = data_l1m.array[:,:,:j3+1]        #(Nb,Nc,j3+1,L,N)
-            data_l1_tmp = deepcopy(data_l1)        #(Nb,Nc,j3+1,L,N)
-            data_l1m_tmp = deepcopy(data_l1m)
+            data_l1_tmp = copy(data_l1)        #(Nb,Nc,j3+1,L,N)
+            data_l1m_tmp = copy(data_l1m)
             data_l1_tmp.array = data_l1_tmp.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
             data_l1m_tmp.array = data_l1m_tmp.array[:,:,:j3+1]
 
@@ -420,8 +414,8 @@ class ST_Operator:
             # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
             # data_l1.array = data_l1.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
             # data_l1m.array = data_l1m.array[:,:,:j3+1]        #(Nb,Nc,j3+1,L,N)
-            data_l1_tmp = deepcopy(data_l1)        #(Nb,Nc,j3+1,L,N)
-            data_l1m_tmp = deepcopy(data_l1m)
+            data_l1_tmp = copy(data_l1)        #(Nb,Nc,j3+1,L,N)
+            data_l1m_tmp = copy(data_l1m)
             data_l1_tmp.array = data_l1_tmp.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
             data_l1m_tmp.array = data_l1m_tmp.array[:,:,:j3+1]
             
@@ -453,8 +447,8 @@ class ST_Operator:
             # # Downsample at Nj3
             # data.downsample(j_to_dg[j3])                            #(Nb,Nc,N3)
             # data_l1m.downsample(j_to_dg[j3])                 #(Nb,Nc,j3+1,L,N3)
-            data_tmp = deepcopy(data)
-            data_l1m_tmp = deepcopy(data_l1m)
+            data_tmp = copy(data)
+            data_l1m_tmp = copy(data_l1m)
             data_l1m_tmp.array = data_l1m_tmp.array[:,:,:j3+1]
             
             # Downsample at Nj3
@@ -477,8 +471,8 @@ class ST_Operator:
 
         for j3 in range(J):
             # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
-            data_tmp = deepcopy(data)
-            data_l1m_tmp = deepcopy(data_l1m)
+            data_tmp = copy(data)
+            data_l1m_tmp = copy(data_l1m)
             data_l1m_tmp.array = data_l1m_tmp.array[:,:,:j3+1]
             
             # Downsample at Nj3
