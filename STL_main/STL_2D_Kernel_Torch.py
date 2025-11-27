@@ -643,17 +643,12 @@ class STL_2D_Kernel_Torch:
             
         return cov        
        
-    def get_wavelet_op(self, kernel_size=None,L=None,J=None):
-        
-        if L is None:
-            L=4
-        if kernel_size is None:
-            kernel_size=5
+    def get_wavelet_op(self, J=None, L=4, kernel_size=5):
         if J is None:
-            J=np.min([int(np.log2(self.N0[0])),int(np.log2(self.N0[1]))])-3
+            J = np.min([int(np.log2(self.N0[0])),int(np.log2(self.N0[1]))])-3
         
         return WavelateOperator2Dkernel_torch(kernel_size,L,J,
-            device=self.array.device,dtype=self.array.dtype)
+                                              device=self.array.device,dtype=self.array.dtype)
        
 
 class WavelateOperator2Dkernel_torch:
