@@ -103,7 +103,7 @@ class STL_2D_Kernel_Torch:
             raise ValueError("Only single resolution array are accepted.")
         
         # Main 
-        self.DT='Planar2D_kernel_torch'
+        self.DT = 'Planar2D_kernel_torch'
         self.MR = False
         if dg is None:
             self.dg = 0

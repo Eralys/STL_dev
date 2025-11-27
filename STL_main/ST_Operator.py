@@ -43,10 +43,8 @@ class ST_Operator:
     Parameters
     ----------
     # Data and Wavelet Transform
-    - DT : str
-        Type of data (1d, 2d planar, HealPix, 3d)
-    - N0 : tuple
-        initial size of array (can be multiple dimensions)
+    - data : instance of some STL_Data_Class
+        Data (1d, 2d planar, HealPix, 3d) ##################################################
     - J : int
         number of scales
     - L : int
@@ -94,8 +92,8 @@ class ST_Operator:
 
     ########################################
     def __init__(self, 
-                 DataClass, J=None, L=None, WType=None,
-                 SC="scat_cov", jmin=None, jmax=None, dj=None,
+                 data, J=None, L=None, WType=None,
+                 SC="ScatCov", jmin=None, jmax=None, dj=None,
                  pbc=True, mask=None, 
                  norm="S2", S2_ref=None, iso=False, 
                  angular_ft=False, scale_ft=False,
@@ -108,15 +106,15 @@ class ST_Operator:
             - a MR=True mask_MR with list_dg = range(dg_max + 1)
         '''
         # Main parameters
-        self.DT = DataClass.DT
-        self.N0 = DataClass.N0
+        self.DT = data.DT
+        self.N0 = data.N0
         
         # Wavelet transform and related parameters
-        self.wavelet_op = DataClass.get_wavelet_op(J,L) #Wavelet_Operator(DT, N0, J, L, WType)
+        self.wavelet_op = data.get_wavelet_op(J,L) #Wavelet_Operator(DT, N0, J, L, WType)
         self.J = self.wavelet_op.J
         self.L = self.wavelet_op.L
         self.WType = self.wavelet_op.WType
-        self.dg = DataClass.dg
+        self.dg = data.dg
         
         # Scattering transform related parameters
         self.SC = SC
@@ -332,7 +330,7 @@ class ST_Operator:
             
         # Initialize ST statistics values
         # Add readability w.r.t. having it in the ST statistics initilization
-        if self.SC == "scat_cov":
+        if self.SC == "ScatCov":
             data_st.S1 = bk.zeros((Nb,Nc,J,L))
             data_st.S2 = bk.zeros((Nb,Nc,J,L))
             data_st.S3 = bk.zeros((Nb,Nc,J,J,L,L),dtype=bk.complex128) + bk.nan
