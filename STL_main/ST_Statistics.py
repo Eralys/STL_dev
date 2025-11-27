@@ -6,6 +6,8 @@ Tentative proposal by EA
 """
 
 import torch as bk # mean, zeros
+import matplotlib.pyplot as plt
+import numpy as np
 
                     
 ###############################################################################
@@ -129,38 +131,61 @@ class ST_Statistics:
     ########################################
     def to_norm(self, norm=None, S2_ref=None):
         '''
-        
         Normalize the ST statistics.
-        
         Parameters
         ----------
         - norm : str
-            type of norm ("S2", "S2_ref")
+            type of norm (“S2”, “S2_ref”)
         - S2_ref : array
             array of reference S2 coefficients
-            
         '''
         
+        # Check the proper ordering
         if self.iso:
-            raise Exception(
-                "Normalization can only be done before isotropization")  
+            raise Exception("Normalization can only be done before isotropization")
         if self.angular_ft:
-            raise Exception(
-                "Normalization can only be done before angular ft")  
+            raise Exception("Normalization can only be done before angular ft")
         if self.scale_ft:
-            raise Exception(
-                "Normalization can only be done before scate_ft")  
+            raise Exception("Normalization can only be done before scate_ft")
             
-        if self.SC == "ScatCov":
-            # perform normalization, to be done
+        # Leave the function if no normalization is required
+        if norm is None:
             pass
-        
-        # Store normalization parameters
-        self.norm = norm
-        self.S2_Ref = S2_ref
-        
-        return self
+            
+        # Store_ref normalization
+        elif norm == "store_ref":
+            # Verifications
+            if self.norm:
+                raise Exception("ST statistics are already normalized")
+            # Perform normalization and store reference
+            if self.SC == "ScatCov":
+                S2_ref = self.S2*1.0
+                self.S1 = self.S1 / bk.sqrt(S2_ref)
+                self.S2 = self.S2 / S2_ref
+                self.S3 = self.S3 / bk.sqrt(S2_ref[:,:,:,None,:,None] * S2_ref[:,:,None,:,None,:])
+                self.S4 = self.S4 / bk.sqrt(S2_ref[:,:,:,None,None,:,None,None] * S2_ref[:,:,None,:,None,None,:,None])
+            self.norm = True
+            self.S2_ref = S2_ref
 
+        # Load_ref normalization
+        elif norm == "load_ref":
+            # Verifications
+            if self.norm:
+                raise Exception("ST statistics are already normalized")
+            if S2_ref is None:
+                raise Exception("S2_ref should be given")
+            # Perform normalization and store reference
+            if self.SC == "ScatCov":
+                self.S1 = self.S1 / bk.sqrt(S2_ref)
+                self.S2 = self.S2 / S2_ref
+                self.S3 = self.S3 / bk.sqrt(S2_ref[:,:,:,None,:,None] * S2_ref[:,:,None,:,None,:])
+                self.S4 = self.S4 / bk.sqrt(S2_ref[:,:,:,None,None,:,None,None] * S2_ref[:,:,None,:,None,None,:,None])
+            # Store normalization parameters
+            self.norm = True
+            self.S2_ref = S2_ref
+            
+        return self
+        
     ########################################
     def to_iso(self):
         '''
@@ -310,18 +335,158 @@ class ST_Statistics:
         return output 
         
     ########################################
-    def plot_coeff(self, param):
-        '''
-        plot coeffs
-        
+    def _to_np(self,x):
+        if isinstance(x, bk.Tensor):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
+
+
+    ########################################
+    def plot_coeff(self, b=0, c=0, hold=False, color=None, figsize=(16, 12)):
+        """
+        Plot scattering covariance coefficients as curves.
+
         Parameters
         ----------
-        - 
-            
-        Output 
-        ----------
-        - 
-            
-        '''
-        
-        #plot coeffs
+        b : int
+            Batch index.
+        c : int
+            Channel index.
+        hold : bool
+            If False, clear the figure before plotting new curves.
+        color : str or None
+            Color for curves (matplotlib format).
+        figsize : tuple
+            Size of figure when hold=False.
+
+        Behavior
+        --------
+        - S1(j,l) : one curve per orientation l.
+        - S2(j,l) : one curve per orientation l.
+        - S3(j1,j2,l1,l2) :
+             * Panel per (l1,l2)
+             * For each panel: x=j1, curves for each j2.
+        - S4(j1,j2,j3,l1,l2,l3) :
+             * Panel per (l1,l2,l3)
+             * For each panel: x=j1, curves for each j2 and j3 fixed.
+        """
+
+        if not hold:
+            plt.figure(figsize=figsize)
+            plt.clf()
+
+        Nb, Nc, J, L = self.Nb, self.Nc, self.J, self.L
+        if b >= Nb or c >= Nc:
+            raise IndexError("b or c index out of range.")
+
+        ###########################################################################
+        # -----------  S1 : (J, L)  ----------- #
+        ###########################################################################
+        if hasattr(self, "S1") and self.S1 is not None:
+            S1 = self._to_np(self.S1[b, c])  # (J, L)
+
+            plt.subplot(2, 2, 1)
+            for l in range(L):
+                y = S1[:, l]
+                mask = ~np.isnan(y)
+                if np.any(mask):
+                    plt.plot(np.arange(J)[mask], y[mask], color=color, label=f"L={l}")
+            plt.title("S1(j1,l)")
+            plt.xlabel("j1")
+            plt.ylabel("S1")
+            plt.grid(True)
+            plt.legend()
+
+        ###########################################################################
+        # -----------  S2 : (J, L)  ----------- #
+        ###########################################################################
+        if hasattr(self, "S2") and self.S2 is not None:
+            S2 = self._to_np(self.S2[b, c])  # (J, L)
+
+            plt.subplot(2, 2, 2)
+            for l in range(L):
+                y = S2[:, l]
+                mask = ~np.isnan(y)
+                if np.any(mask):
+                    plt.plot(np.arange(J)[mask], y[mask], color=color, label=f"L={l}")
+            plt.title("S2(j1,l)")
+            plt.xlabel("j1")
+            plt.ylabel("S2")
+            plt.grid(True)
+            plt.legend()
+
+        ###########################################################################
+        # -----------  S3 : (J,J,L,L)  ----------- #
+        ###########################################################################
+        if hasattr(self, "S3") and self.S3 is not None:
+            S3 = self._to_np(self.S3[b, c])  # (J, J, L, L)
+
+            # On ouvre une figure dédiée pour S3 si hold=False (car beaucoup de panels)
+            if not hold:
+                fig3 = plt.figure(figsize=(14, 10))
+                fig3.suptitle("S3(j1,j2,l1,l2)")
+
+            panel = 1
+            for l1 in range(L):
+                for l2 in range(L):
+                    if not hold:
+                        plt.subplot(L, L, panel)
+                    panel += 1
+
+                    # S3[j1, j2] (fix l1,l2)
+                    S = S3[:, :, l1, l2]  # shape (J,J)
+
+                    for j2 in range(J):
+                        y = S[:, j2]
+                        mask = ~np.isnan(y)
+                        if np.any(mask):
+                            plt.plot(np.arange(J)[mask], y[mask],
+                                     color=color, label=f"j2={j2}")
+
+                    if not hold:
+                        plt.title(f"S3 l1={l1}, l2={l2}")
+                        plt.xlabel("j1")
+                        plt.ylabel("coef")
+                        plt.grid(True)
+                        # (pas de légende pour éviter surcharge visuelle)
+
+        ###########################################################################
+        # -----------  S4 : (J,J,J,L,L,L)  ----------- #
+        ###########################################################################
+        if hasattr(self, "S4") and self.S4 is not None:
+            S4 = self._to_np(self.S4[b, c])  # (J, J, J, L, L, L)
+
+            # Figure dédiée
+            if not hold:
+                fig4 = plt.figure(figsize=(16, 12))
+                fig4.suptitle("S4(j1,j2,j3,l1,l2,l3)")
+
+            panel = 1
+            for l1 in range(L):
+                for l2 in range(L):
+                    for l3 in range(L):
+                        # trop de sous-graphiques si L grand : à ton goût !
+                        if not hold:
+                            plt.subplot(L**2, L, panel)
+                        panel += 1
+
+                        # S4[j1,j2,j3,l1,l2,l3]
+                        S = S4[:, :, :, l1, l2, l3]  # (J,J,J)
+
+                        for j2 in range(J):
+                            for j3 in range(J):
+                                y = S[:, j2, j3]
+                                mask = ~np.isnan(y)
+                                if np.any(mask):
+                                    plt.plot(np.arange(J)[mask], y[mask],
+                                             color=color)
+
+                        if not hold:
+                            plt.title(f"S4 l1={l1},l2={l2},l3={l3}")
+                            plt.xlabel("j1")
+                            plt.ylabel("coef")
+                            plt.grid(True)
+
+        if not hold:
+            plt.tight_layout()
+            plt.show()

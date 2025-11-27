@@ -105,14 +105,8 @@ class STL_2D_Kernel_Torch:
         # Main 
         self.DT = 'Planar2D_kernel_torch'
         self.MR = False
-        if dg is None:
-            self.dg = 0
-            self.N0 = array.shape[-2:]
-        else:
-            self.dg=dg
-            if N0 is None:
-                raise ValueError("dg is given, N0 should not be None")
-            self.N0=N0
+        self.dg = 0
+        self.N0 = array.shape[-2:]
         
         self.array = self.to_array(array)
         
@@ -124,7 +118,6 @@ class STL_2D_Kernel_Torch:
         
             
     ###########################################################################
-    @staticmethod
     def to_array(self,array):
         """
         Transform input array (NumPy or PyTorch) into a PyTorch tensor.

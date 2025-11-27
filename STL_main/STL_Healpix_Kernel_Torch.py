@@ -23,13 +23,13 @@ from SphericalStencil import SphericalStencil   # adapt if needed
 
 ###############################################################################
 class STL_Healpix_Kernel_Torch:
-    """
+    """HealpixKernel_torch
     HEALPix analogue of STL2DKernel.
 
     Attributes
     ----------
     DT : str
-        Data type identifier ("HealpixKernel_torch").
+        Data type identifier ("").
     MR : bool
         If True, stores a list of arrays at multiple resolutions.
     N0 : int
@@ -50,8 +50,9 @@ class STL_Healpix_Kernel_Torch:
         Default dtype for internal tensors.
     """
 
+                            
     ###########################################################################
-    def __init__(self, array, nside=None, cell_ids=None, dg=None, nest=True):
+    def __init__(self, array, nside=None, cell_ids=None, nest=True):
         """
         Constructor for single-resolution Healpix data (MR == False).
 
@@ -77,10 +78,7 @@ class STL_Healpix_Kernel_Torch:
         self.MR = False
         self.nest = bool(nest)
 
-        if dg is None:
-            self.dg = 0
-        else:
-            self.dg = int(dg)
+        self.dg = 0
 
         # Store N0 as the "reference" resolution at dg=0
         if nside is None:
@@ -107,6 +105,17 @@ class STL_Healpix_Kernel_Torch:
 
         # Multi-resolution attributes
         self.list_dg = None
+        
+        #smooth kernel coded
+        # x,y=np.meshgrid(np.arange(5)-2,np.arange(5)-2)
+        # sigma=1.0
+        # np.exp(-(x**2+y**2)/(2*sigma**2))
+        self.smooth_kernel = torch.Tensor(np.array([0.01831564, 0.082085  , 0.13533528, 0.082085  , 0.01831564,
+                            0.082085  , 0.36787944, 0.60653066, 0.36787944, 0.082085  ,
+                            0.13533528, 0.60653066, 1.        , 0.60653066, 0.13533528,
+                            0.082085  , 0.36787944, 0.60653066, 0.36787944, 0.082085  ,
+                            0.01831564, 0.082085  , 0.13533528, 0.082085  , 0.01831564]).reshape(1,1,25))
+        self.smooth_kernel = self.smooth_kernel/self.smooth_kernel.sum()
 
     ###########################################################################
     @staticmethod
@@ -187,6 +196,7 @@ class STL_Healpix_Kernel_Torch:
         new.list_dg = list(self.list_dg) if self.list_dg is not None else None
         new.device = self.device
         new.dtype = self.dtype
+        new.smooth_kernel = self.smooth_kernel
 
         # Copy data
         if empty:
@@ -319,11 +329,11 @@ class STL_Healpix_Kernel_Torch:
             x_c = x
             y_c = y
 
-        cov = (x_c * y_c).mean(dim=dim)
+        cov = (x_c * y_c.conj()).mean(dim=dim)
         return cov
 
     ###########################################################################
-    def _downsample_once(self, kernel_sz=3, max_poll=False):
+    def _downsample_once(self, max_poll=False):
         """
         Downsample by one step in nside using SphericalStencil.Down.
 
@@ -338,6 +348,9 @@ class STL_Healpix_Kernel_Torch:
         new_nside : int
             New nside (typically nside // 2).
         """
+        
+        kernel_sz = int(np.sqrt(self.smooth_kernel.shape[-1]))
+        
         # Current geometry
         nside_in = self.nside
         cid_np = self.cell_ids.detach().cpu().numpy().astype(np.int64)
@@ -358,10 +371,14 @@ class STL_Healpix_Kernel_Torch:
             kernel_sz=kernel_sz,
             nest=self.nest,
             cell_ids=cid_np,
+            n_gauges=1,
+            gauge_type='cosmo',
             device=self.device,
             dtype=self.dtype,
         )
 
+        x_bc = stencil.Convol_torch(x_bc, self.smooth_kernel, cell_ids=cid_np, nside=nside_in)
+        
         # Call Down: expect (B,1,K_out), ids_out
         dim, cid_out = stencil.Down(x_bc, cell_ids=cid_np, nside=nside_in, max_poll=max_poll)
 
@@ -422,11 +439,13 @@ class STL_Healpix_Kernel_Torch:
             raise ValueError("Requested dg_out < current dg; upsampling not supported.")
 
         data = self.copy(empty=False) if copy else self
+        
+        
 
         # Number of single steps we need
         dg_inc = dg_out - data.dg
         for _ in range(dg_inc):
-            new_arr, new_cid, new_nside = data._downsample_once(kernel_sz=3, max_poll=False)
+            new_arr, new_cid, new_nside = data._downsample_once(max_poll=False)
             data.array = new_arr
             data.cell_ids = new_cid
             data.nside = new_nside
@@ -509,9 +528,22 @@ class STL_Healpix_Kernel_Torch:
             cell_ids=self.cell_ids.detach().cpu().numpy(),
             device=self.device,
             dtype=self.dtype,
+            n_gauges=L,
+            gauge_type='cosmo'
+        )
+        stencil_smooth = SphericalStencil(
+            nside=self.nside,
+            kernel_sz=kernel_size,
+            nest=self.nest,
+            cell_ids=self.cell_ids.detach().cpu().numpy(),
+            device=self.device,
+            dtype=self.dtype,
+            n_gauges=1,
+            gauge_type='cosmo'
         )
         return WavelateOperatorHealpixKernel_torch(
             stencil=stencil,
+            stencil_smooth=stencil_smooth,
             kernel_size=kernel_size,
             L=L,
             J=J,
@@ -533,9 +565,10 @@ class WavelateOperatorHealpixKernel_torch:
     to WavelateOperator2Dkernel_torch in STL2DKernel.
     """
 
-    def __init__(self, stencil: SphericalStencil, kernel_size: int, L: int, J: int,
+    def __init__(self, stencil: SphericalStencil, stencil_smooth: SphericalStencil, kernel_size: int, L: int, J: int,
                  device='cuda', dtype=torch.float):
         self.stencil = stencil
+        self.stencil_smooth = stencil_smooth
         self.KERNELSZ = kernel_size
         self.L = L
         self.J = J
@@ -545,7 +578,7 @@ class WavelateOperatorHealpixKernel_torch:
 
         # Build (1, L, P) kernel, where P=K^2
         kernel_2d = self._wavelet_kernel(kernel_size, L)  # (1, L, K, K)
-        self.kernel = kernel_2d.reshape(1, L, kernel_size * kernel_size)  # (Ci=1, Co=L, P)
+        self.kernel = kernel_2d.reshape(1, 1, kernel_size * kernel_size)  # (Ci=1, Co=L, P)
 
     def _wavelet_kernel(self, kernel_size: int, n_orientation: int, sigma=1.0):
         """
@@ -565,16 +598,10 @@ class WavelateOperatorHealpixKernel_torch:
         yy, xx = torch.meshgrid(coords, coords, indexing="ij")
 
         # Isotropic Gaussian envelope
-        mother_kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))[None, :, :]
+        mother_kernel = torch.exp(-(xx**2 + yy**2) / (2*sigma**2))[None, :, :]
 
-        # Orientations
-        angles = torch.arange(
-            n_orientation, device=self.device, dtype=self.dtype
-        ) / n_orientation * np.pi
-        angles_proj = torch.pi * (
-            xx[None, ...] * torch.cos(angles[:, None, None]) +
-            yy[None, ...] * torch.sin(angles[:, None, None])
-        )
+        # Orientations done in the gauges paradigm
+        angles_proj = 0.5 * torch.pi * (xx[None, ...])
 
         kernel = torch.complex(
             torch.cos(angles_proj) * mother_kernel,
@@ -585,7 +612,7 @@ class WavelateOperatorHealpixKernel_torch:
         kernel = kernel - torch.mean(kernel, dim=(1, 2), keepdim=True)
         kernel = kernel / torch.sum(kernel.abs(), dim=(1, 2), keepdim=True)
 
-        return kernel.reshape(1, n_orientation, kernel_size, kernel_size)
+        return kernel.reshape(1, 1, kernel_size, kernel_size)
 
     def get_L(self):
         return self.L
@@ -650,3 +677,59 @@ class WavelateOperatorHealpixKernel_torch:
         out.N0 = data.N0
         out.list_dg = None
         return out
+        
+    def apply_smooth(self, data: STL_Healpix_Kernel_Torch, copy: bool = False):
+        """
+        Smooth the data by convolving with a smooth kernel derived from the
+        wavelet orientation 0. The data shape is preserved.
+
+        Parameters
+        ----------
+        data : STL_Healpix_Kernel_Torch
+            Input Healpix data with array of shape [..., K] and cell_ids aligned.
+        copy : bool
+            If True, return a new STL_Healpix_Kernel_Torch instance.
+            If False, modify the input object in-place and return it.
+
+        Returns
+        -------
+        STL_Healpix_Kernel_Torch
+            Smoothed data object with same shape as input (no extra L dimension).
+        """
+        x = data.array  # [..., K]
+        cid = data.cell_ids
+        *leading, K = x.shape
+
+        # Flatten leading dims into batch dimension: (B, Ci=1, K)
+        if leading:
+            B = int(np.prod(leading))
+        else:
+            B = 1
+        x_bc = x.reshape(B, 1, K)
+
+        # Smooth kernel (Ci=1, Co=1, P)
+        w_smooth = self.kernel.abs().to(device=data.device, dtype=data.dtype)
+
+        # Make sure stencil uses the right device/dtype
+        if (self.stencil_smooth.device != data.device) or (self.stencil_smooth.dtype != data.dtype):
+            self.stencil_smooth.device = data.device
+            self.stencil_smooth.dtype = data.dtype
+
+        # Convolution on sphere -> (B, 1, K)
+        y_bc = self.stencil_smooth.Convol_torch(
+            x_bc,
+            w_smooth,
+            cell_ids=cid.detach().cpu().numpy()
+        )
+        
+        if not isinstance(y_bc, torch.Tensor):
+            y_bc = torch.as_tensor(y_bc, device=data.device, dtype=data.dtype)
+
+        y = y_bc.reshape(*leading, K)  # same shape as input x
+
+        # Copy or in-place update
+        out = data.copy(empty=True) if copy else data
+        out.array = y
+        # metadata stays identical (nside, N0, dg, cell_ids, ...)
+        return out
+
