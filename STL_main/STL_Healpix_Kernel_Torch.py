@@ -355,6 +355,8 @@ class STL_Healpix_Kernel_Torch:
             kernel_sz=kernel_sz,
             nest=self.nest,
             cell_ids=cid_np,
+            n_gauges=1,
+            gauge_type='cosmo',
             device=self.device,
             dtype=self.dtype,
         )
@@ -506,6 +508,8 @@ class STL_Healpix_Kernel_Torch:
             cell_ids=self.cell_ids.detach().cpu().numpy(),
             device=self.device,
             dtype=self.dtype,
+            n_gauges=L,
+            gauge_type='cosmo'
         )
         return WavelateOperatorHealpixKernel_torch(
             stencil=stencil,
@@ -542,7 +546,7 @@ class WavelateOperatorHealpixKernel_torch:
 
         # Build (1, L, P) kernel, where P=K^2
         kernel_2d = self._wavelet_kernel(kernel_size, L)  # (1, L, K, K)
-        self.kernel = kernel_2d.reshape(1, L, kernel_size * kernel_size)  # (Ci=1, Co=L, P)
+        self.kernel = kernel_2d.reshape(1, 1, kernel_size * kernel_size)  # (Ci=1, Co=L, P)
 
     def _wavelet_kernel(self, kernel_size: int, n_orientation: int, sigma=1.0):
         """
@@ -562,16 +566,10 @@ class WavelateOperatorHealpixKernel_torch:
         yy, xx = torch.meshgrid(coords, coords, indexing="ij")
 
         # Isotropic Gaussian envelope
-        mother_kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))[None, :, :]
+        mother_kernel = torch.exp(-(xx**2 + yy**2) / (2*sigma**2))[None, :, :]
 
-        # Orientations
-        angles = torch.arange(
-            n_orientation, device=self.device, dtype=self.dtype
-        ) / n_orientation * np.pi
-        angles_proj = torch.pi * (
-            xx[None, ...] * torch.cos(angles[:, None, None]) +
-            yy[None, ...] * torch.sin(angles[:, None, None])
-        )
+        # Orientations done in the gauges paradigm
+        angles_proj = 0.5 * torch.pi * (xx[None, ...])
 
         kernel = torch.complex(
             torch.cos(angles_proj) * mother_kernel,
@@ -582,7 +580,7 @@ class WavelateOperatorHealpixKernel_torch:
         kernel = kernel - torch.mean(kernel, dim=(1, 2), keepdim=True)
         kernel = kernel / torch.sum(kernel.abs(), dim=(1, 2), keepdim=True)
 
-        return kernel.reshape(1, n_orientation, kernel_size, kernel_size)
+        return kernel.reshape(1, 1, kernel_size, kernel_size)
 
     def get_L(self):
         return self.L

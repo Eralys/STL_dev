@@ -398,11 +398,19 @@ class ST_Operator:
         ########################################
         # Additional transform/compression
         ########################################
-        
-        if norm is not None:
-            data_st.to_norm(norm, S2_ref)
-            if norm == 'auto':
-                self.S2_ref = data_st.S2_ref
+        # Normalisation
+        if norm is None:
+            pass
+        elif norm == "store_ref":
+            if self.S2_ref is not None:
+                print("S2_ref of the ST_Op is overwrote")
+            data_st.to_norm(norm)
+            self.S2_ref = data_st.S2_ref
+        elif norm == "load_ref":
+            if S2_ref is None:
+                raise Exception("S2_ref should be stored in the ST_Operator")
+            data_st.to_norm(norm, S2_ref = self.S2_ref)
+            
         if iso:
             data_st.to_iso()
             

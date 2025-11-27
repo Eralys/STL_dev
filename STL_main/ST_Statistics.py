@@ -140,29 +140,50 @@ class ST_Statistics:
             array of reference S2 coefficients
         '''
         
+        # Check the proper ordering
         if self.iso:
             raise Exception("Normalization can only be done before isotropization")
         if self.angular_ft:
             raise Exception("Normalization can only be done before angular ft")
         if self.scale_ft:
             raise Exception("Normalization can only be done before scate_ft")
-        if self.SC == "ScatCov":
-            if norm == "auto":
-                # perform normalization
+            
+        # Leave the function if no normalization is required
+        if norm is None:
+            pass
+            
+        # Store_ref normalization
+        elif norm == "store_ref":
+            # Verifications
+            if self.norm:
+                raise Exception("ST statistics are already normalized")
+            # Perform normalization and store reference
+            if self.SC == "ScatCov":
                 S2_ref = self.S2*1.0
                 self.S1 = self.S1 / bk.sqrt(S2_ref)
                 self.S2 = self.S2 / S2_ref
                 self.S3 = self.S3 / bk.sqrt(S2_ref[:,:,:,None,:,None] * S2_ref[:,:,None,:,None,:])
                 self.S4 = self.S4 / bk.sqrt(S2_ref[:,:,:,None,None,:,None,None] * S2_ref[:,:,None,:,None,None,:,None])
-            elif norm == "S2_ref":
-                # perform normalization
+            self.norm = True
+            self.S2_ref = S2_ref
+
+        # Load_ref normalization
+        elif norm == "load_ref":
+            # Verifications
+            if self.norm:
+                raise Exception("ST statistics are already normalized")
+            if S2_ref is None:
+                raise Exception("S2_ref should be given")
+            # Perform normalization and store reference
+            if self.SC == "ScatCov":
                 self.S1 = self.S1 / bk.sqrt(S2_ref)
                 self.S2 = self.S2 / S2_ref
                 self.S3 = self.S3 / bk.sqrt(S2_ref[:,:,:,None,:,None] * S2_ref[:,:,None,:,None,:])
                 self.S4 = self.S4 / bk.sqrt(S2_ref[:,:,:,None,None,:,None,None] * S2_ref[:,:,None,:,None,None,:,None])
-        # Store normalization parameters
-        self.norm = norm
-        self.S2_ref = S2_ref
+            # Store normalization parameters
+            self.norm = True
+            self.S2_ref = S2_ref
+            
         return self
         
     ########################################
