@@ -17,7 +17,7 @@ class STL_2D_FFT_Torch:
         array = torch.as_tensor(data)
         return array
 
-    @ staticmethod    
+    @staticmethod    
     def cov(array1, fourier_status1, array2, fourier_status2, mask, remove_mean=False):
         """
         Compute the covariance of two tensors on their last two dimensions.

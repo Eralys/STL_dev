@@ -6,6 +6,8 @@ Tentative proposal by EA
 """
 
 import torch as bk # mean, zeros
+import matplotlib.pyplot as plt
+import numpy as np
 
                     
 ###############################################################################
@@ -129,38 +131,40 @@ class ST_Statistics:
     ########################################
     def to_norm(self, norm=None, S2_ref=None):
         '''
-        
         Normalize the ST statistics.
-        
         Parameters
         ----------
         - norm : str
-            type of norm ("S2", "S2_ref")
+            type of norm (“S2”, “S2_ref”)
         - S2_ref : array
             array of reference S2 coefficients
-            
         '''
         
         if self.iso:
-            raise Exception(
-                "Normalization can only be done before isotropization")  
+            raise Exception("Normalization can only be done before isotropization")
         if self.angular_ft:
-            raise Exception(
-                "Normalization can only be done before angular ft")  
+            raise Exception("Normalization can only be done before angular ft")
         if self.scale_ft:
-            raise Exception(
-                "Normalization can only be done before scate_ft")  
-            
+            raise Exception("Normalization can only be done before scate_ft")
         if self.SC == "ScatCov":
-            # perform normalization, to be done
-            pass
-        
+            if norm == "auto":
+                # perform normalization
+                S2_ref = self.S2*1.0
+                self.S1 = self.S1 / bk.sqrt(S2_ref)
+                self.S2 = self.S2 / S2_ref
+                self.S3 = self.S3 / bk.sqrt(S2_ref[:,:,:,None,:,None] * S2_ref[:,:,None,:,None,:])
+                self.S4 = self.S4 / bk.sqrt(S2_ref[:,:,:,None,None,:,None,None] * S2_ref[:,:,None,:,None,None,:,None])
+            elif norm == "S2_ref":
+                # perform normalization
+                self.S1 = self.S1 / bk.sqrt(S2_ref)
+                self.S2 = self.S2 / S2_ref
+                self.S3 = self.S3 / bk.sqrt(S2_ref[:,:,:,None,:,None] * S2_ref[:,:,None,:,None,:])
+                self.S4 = self.S4 / bk.sqrt(S2_ref[:,:,:,None,None,:,None,None] * S2_ref[:,:,None,:,None,None,:,None])
         # Store normalization parameters
         self.norm = norm
-        self.S2_Ref = S2_ref
-        
+        self.S2_ref = S2_ref
         return self
-
+        
     ########################################
     def to_iso(self):
         '''
@@ -310,18 +314,127 @@ class ST_Statistics:
         return output 
         
     ########################################
-    def plot_coeff(self, param):
-        '''
-        plot coeffs
-        
+    def plot_coeff(self, b=0, c=0, figsize=(12, 10), cmap="viridis"):
+        """
+        Plot scattering covariance coefficients S1, S2, S3, S4
+        in a 2x2 figure (one quadrant per S).
+
         Parameters
         ----------
-        - 
-            
-        Output 
-        ----------
-        - 
-            
-        '''
-        
-        #plot coeffs
+        b : int
+            Batch index to visualize (0 <= b < Nb).
+        c : int
+            Channel index to visualize (0 <= c < Nc).
+        figsize : tuple
+            Size of the matplotlib figure.
+        cmap : str
+            Matplotlib colormap name.
+
+        Notes
+        -----
+        Shapes used (for SC == "ScatCov") are assumed to be:
+          - S1, S2 : (Nb, Nc, J, L)
+          - S3     : (Nb, Nc, J, J, L, L)
+          - S4     : (Nb, Nc, J, J, J, L, L, L)
+        For S3 and S4, we aggregate over all orientation indices L
+        (and over j3 for S4) to obtain a 2D map in (j1, j2).
+        """
+
+        if self.SC != "ScatCov":
+            raise ValueError("plot_coeff currently implemented for SC == 'ScatCov' only.")
+
+        Nb, Nc, J, L = self.Nb, self.Nc, self.J, self.L
+        if not (0 <= b < Nb):
+            raise IndexError(f"Batch index b={b} out of range [0,{Nb-1}]")
+        if not (0 <= c < Nc):
+            raise IndexError(f"Channel index c={c} out of range [0,{Nc-1}]")
+
+        # Helper to move torch -> numpy safely
+        def to_np(x):
+            if isinstance(x, bk.Tensor):
+                return x.detach().cpu().numpy()
+            return np.asarray(x)
+
+        fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+        # ---------- S1 : (J, L) ----------
+        if getattr(self, "S1", None) is not None:
+            S1_bc = to_np(self.S1[b, c])      # (J, L)
+            im1 = axes[0, 0].imshow(
+                S1_bc,
+                origin="lower",
+                aspect="auto",
+                cmap=cmap
+            )
+            axes[0, 0].set_title("S1(j1, l)")
+            axes[0, 0].set_xlabel("l")
+            axes[0, 0].set_ylabel("j1")
+            fig.colorbar(im1, ax=axes[0, 0])
+        else:
+            axes[0, 0].set_visible(False)
+
+        # ---------- S2 : (J, L) ----------
+        if getattr(self, "S2", None) is not None:
+            S2_bc = to_np(self.S2[b, c])      # (J, L)
+            im2 = axes[0, 1].imshow(
+                S2_bc,
+                origin="lower",
+                aspect="auto",
+                cmap=cmap
+            )
+            axes[0, 1].set_title("S2(j1, l)")
+            axes[0, 1].set_xlabel("l")
+            axes[0, 1].set_ylabel("j1")
+            fig.colorbar(im2, ax=axes[0, 1])
+        else:
+            axes[0, 1].set_visible(False)
+
+        # ---------- S3 : (J, J, L, L) -> (J, J) ----------
+        if getattr(self, "S3", None) is not None:
+            S3_bc = to_np(self.S3[b, c])      # (J, J, L, L)
+            # Aggregate over all orientations (L1,L2)
+            # and ignore NaNs
+            with np.errstate(invalid="ignore"):
+                S3_mag = np.abs(S3_bc)
+                S3_jj = np.nanmean(np.nanmean(S3_mag, axis=-1), axis=-1)  # (J, J)
+
+            im3 = axes[1, 0].imshow(
+                S3_jj,
+                origin="lower",
+                aspect="auto",
+                cmap=cmap
+            )
+            axes[1, 0].set_title("S3(j1, j2)  (avg over L1,L2)")
+            axes[1, 0].set_xlabel("j2")
+            axes[1, 0].set_ylabel("j1")
+            fig.colorbar(im3, ax=axes[1, 0])
+        else:
+            axes[1, 0].set_visible(False)
+
+        # ---------- S4 : (J, J, J, L, L, L) -> (J, J) ----------
+        if getattr(self, "S4", None) is not None:
+            S4_bc = to_np(self.S4[b, c])      # (J, J, J, L, L, L)
+            # Aggregate over j3 and over all orientations (L1,L2,L3)
+            with np.errstate(invalid="ignore"):
+                S4_mag = np.abs(S4_bc)
+                # axes: j1, j2, j3, l1, l2, l3 -> keep j1,j2
+                S4_jj = np.nanmean(
+                    S4_mag,
+                    axis=(2, 3, 4, 5)
+                )  # (J, J)
+
+            im4 = axes[1, 1].imshow(
+                S4_jj,
+                origin="lower",
+                aspect="auto",
+                cmap=cmap
+            )
+            axes[1, 1].set_title("S4(j1, j2)  (avg over j3,L1,L2,L3)")
+            axes[1, 1].set_xlabel("j2")
+            axes[1, 1].set_ylabel("j1")
+            fig.colorbar(im4, ax=axes[1, 1])
+        else:
+            axes[1, 1].set_visible(False)
+
+        plt.tight_layout()
+        plt.show()

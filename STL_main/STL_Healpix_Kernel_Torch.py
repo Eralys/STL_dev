@@ -51,7 +51,7 @@ class STL_Healpix_Kernel_Torch:
     """
 
     ###########################################################################
-    def __init__(self, array, nside=None, cell_ids=None, dg=None, nest=True):
+    def __init__(self, array, nside=None, cell_ids=None, nest=True):
         """
         Constructor for single-resolution Healpix data (MR == False).
 
@@ -77,10 +77,7 @@ class STL_Healpix_Kernel_Torch:
         self.MR = False
         self.nest = bool(nest)
 
-        if dg is None:
-            self.dg = 0
-        else:
-            self.dg = int(dg)
+        self.dg = 0
 
         # Store N0 as the "reference" resolution at dg=0
         if nside is None:

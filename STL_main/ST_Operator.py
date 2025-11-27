@@ -95,7 +95,7 @@ class ST_Operator:
     ########################################
     def __init__(self, 
                  DataClass, J=None, L=None, WType=None,
-                 SC="scat_cov", jmin=None, jmax=None, dj=None,
+                 SC="ScatCov", jmin=None, jmax=None, dj=None,
                  pbc=True, mask=None, 
                  norm="S2", S2_ref=None, iso=False, 
                  angular_ft=False, scale_ft=False,
@@ -332,7 +332,7 @@ class ST_Operator:
             
         # Initialize ST statistics values
         # Add readability w.r.t. having it in the ST statistics initilization
-        if self.SC == "scat_cov":
+        if self.SC == "ScatCov":
             data_st.S1 = bk.zeros((Nb,Nc,J,L))
             data_st.S2 = bk.zeros((Nb,Nc,J,L))
             data_st.S3 = bk.zeros((Nb,Nc,J,J,L,L),dtype=bk.complex128) + bk.nan
@@ -358,11 +358,12 @@ class ST_Operator:
         # S4 = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
         
         data_l1m={}
+        l_data=data.copy()
         ### Higher order computation ###
         for j3 in range(J):
             
             # Compute first convolution and modulus
-            data_l1 = self.wavelet_op.apply(data,j3)                  #(Nb,Nc,L,N3)
+            data_l1 = self.wavelet_op.apply(l_data,j3)                  #(Nb,Nc,L,N3)
             data_l1m[j3] = data_l1.modulus(copy=True)                #(Nb,Nc,L,N3) 
             
             # Compute S1 and S2
@@ -390,7 +391,7 @@ class ST_Operator:
                             )         
                             
             # Downsample at Nj3
-            data.downsample(j3+1)                  #(Nb,Nc,j3+1,L,N3)
+            l_data.downsample(j3+1)                  #(Nb,Nc,j3+1,L,N3)
             for j2 in range(j3+1): 
                 data_l1m[j2].downsample(j3+1)                 #(Nb,Nc,j3+1,L,N3)
             
@@ -400,7 +401,8 @@ class ST_Operator:
         
         if norm is not None:
             data_st.to_norm(norm, S2_ref)
-            
+            if norm == 'auto':
+                self.S2_ref = data_st.S2_ref
         if iso:
             data_st.to_iso()
             
