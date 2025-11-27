@@ -337,8 +337,8 @@ class ST_Operator:
         if self.SC == "scat_cov":
             data_st.S1 = bk.zeros((Nb,Nc,J,L))
             data_st.S2 = bk.zeros((Nb,Nc,J,L))
-            data_st.S3 = bk.zeros((Nb,Nc,J,J,L,L)) + bk.nan
-            data_st.S4 = bk.zeros((Nb,Nc,J,J,J,L,L,L)) + bk.nan
+            data_st.S3 = bk.zeros((Nb,Nc,J,J,L,L),dtype=bk.complex128) + bk.nan
+            data_st.S4 = bk.zeros((Nb,Nc,J,J,J,L,L,L),dtype=bk.complex128) + bk.nan
         
         ########################################
         # ST coefficients computation

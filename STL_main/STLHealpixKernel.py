@@ -622,7 +622,8 @@ class WavelateOperatorHealpixKernel_torch:
         x_bc = x.reshape(B, 1, K)
 
         # Kernel for SphericalStencil: (Ci=1, Co=L, P)
-        ww = self.kernel.to(device=data.device, dtype=data.dtype)
+        wr = torch.real(self.kernel).to(device=data.device, dtype=data.dtype)
+        wi = torch.imag(self.kernel).to(device=data.device, dtype=data.dtype)
 
         # Use the same stencil but rebind device/dtype if needed
         if (self.stencil.device != data.device) or (self.stencil.dtype != data.dtype):
@@ -631,7 +632,8 @@ class WavelateOperatorHealpixKernel_torch:
             self.stencil.dtype = data.dtype
 
         # Convolution on sphere -> (B, L, K)
-        y_bc = self.stencil.Convol_torch(x_bc, ww, cell_ids=cid.detach().cpu().numpy())
+        y_bc = torch.complex(self.stencil.Convol_torch(x_bc, wr, cell_ids=cid.detach().cpu().numpy()),
+                            self.stencil.Convol_torch(x_bc, wi, cell_ids=cid.detach().cpu().numpy()))
         if not isinstance(y_bc, torch.Tensor):
             y_bc = torch.as_tensor(y_bc, device=data.device, dtype=data.dtype)
 
