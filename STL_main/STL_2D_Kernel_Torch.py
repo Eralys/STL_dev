@@ -198,13 +198,16 @@ class STL_2D_Kernel_Torch:
             return None
         elif isinstance(array, list):
             return array
-        elif isinstance(array, np.ndarray):
-            return torch.from_numpy(array).to('cuda')
+
+        # Choose device: use GPU if available, otherwise CPU
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        if isinstance(array, np.ndarray):
+            return torch.from_numpy(array).to(device)
         elif isinstance(array, torch.Tensor):
-            return array.to('cuda')
+            return array.to(device)
         else:
             raise TypeError(f"Unsupported array type: {type(array)}")
-
             
     ###########################################################################
     def copy(self, empty=False):
@@ -654,12 +657,13 @@ class STL_2D_Kernel_Torch:
        
 
 class WavelateOperator2Dkernel_torch:
-    def __init__(self, kernel_size: int, L: int, J: int, device='cuda',dtype=torch.float):
+    def __init__(self, kernel_size: int, L: int, J: int, device='cpu',dtype=torch.float):
         """
         kernel: torch.Tensor
             Convolution kernel, either of shape [1, L, K, K] .
             L is the number of output channels.
         """
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device=device
         self.dtype=dtype
         
