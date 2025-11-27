@@ -341,7 +341,6 @@ class ST_Operator:
         # Initialize ST statistics values
         # Add readability w.r.t. having it in the ST statistics initilization
         if self.SC == "ScatCov":
-        if self.SC == "ScatCov":
             data_st.S1 = bk.zeros((Nb,Nc,J,L))
             data_st.S2 = bk.zeros((Nb,Nc,J,L))
             data_st.S3 = bk.zeros((Nb,Nc,J,J,L,L),dtype=bk.complex128) + bk.nan
