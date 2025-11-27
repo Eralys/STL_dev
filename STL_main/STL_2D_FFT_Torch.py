@@ -303,7 +303,7 @@ class STL_2D_FFT_Torch:
             return self.array, self.fourier_status
         
 
-    def get_wavelet_op(self, L=4, J=None, WType="Crappy"):
+    def get_wavelet_op(self, J=None, L=4, WType="Crappy"):
     
         # Default values
         if J is None:
