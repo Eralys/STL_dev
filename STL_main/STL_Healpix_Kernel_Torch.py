@@ -676,7 +676,7 @@ class WavelateOperatorHealpixKernel_torch:
         out.list_dg = None
         return out
         
-    def apply_smooth(self, data: STL_Healpix_Kernel_Torch, copy: bool = False):
+    def apply_smooth(self, data: STL_Healpix_Kernel_Torch, inplace: bool = True):
         """
         Smooth the data by convolving with a smooth kernel derived from the
         wavelet orientation 0. The data shape is preserved.
@@ -726,7 +726,7 @@ class WavelateOperatorHealpixKernel_torch:
         y = y_bc.reshape(*leading, K)  # same shape as input x
 
         # Copy or in-place update
-        out = data.copy(empty=True) if copy else data
+        out = data.copy(empty=True) if not inplace else data
         out.array = y
         # metadata stays identical (nside, N0, dg, cell_ids, ...)
         return out

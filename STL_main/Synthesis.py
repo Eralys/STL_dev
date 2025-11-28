@@ -24,7 +24,7 @@ class ScatteringMatchModel(nn.Module):
         # Learnable field u
         self.u = STLDataClass(torch.randn(init_shape, device=device, dtype=dtype))
         w_op = self.u.get_wavelet_op()
-        self.u = nn.Parameter(w_op.apply_smooth(self.u,copy=True).array)
+        self.u = nn.Parameter(w_op.apply_smooth(self.u,inplace=False).array)
         
 
     def forward(self):

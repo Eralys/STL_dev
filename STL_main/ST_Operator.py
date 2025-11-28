@@ -370,9 +370,9 @@ class ST_Operator:
         ### Higher order computation ###
         for j3 in range(J):
             # Compute first convolution and modulus
+            
             data_l1 = self.wavelet_op.apply(l_data,j3)                  #(Nb,Nc,L,N3)
             data_l1m[j3] = data_l1.modulus(inplace=False)                #(Nb,Nc,L,N3) 
-            
             
             # Compute S1 and S2
             data_st.S1[:,:,j3,:] = data_l1m[j3].mean()                          #(Nb,Nc,J,L)
