@@ -370,8 +370,8 @@ class ST_Operator:
         ### Higher order computation ###
         for j3 in range(J):
             # Compute first convolution and modulus
-            
-            data_l1 = self.wavelet_op.apply(l_data,j3)                  #(Nb,Nc,L,N3)
+            print(j3)
+            data_l1 = self.wavelet_op.apply(l_data, j=j3)                  #(Nb,Nc,L,N3)
             data_l1m[j3] = data_l1.modulus(inplace=False)                #(Nb,Nc,L,N3) 
             
             # Compute S1 and S2
@@ -381,7 +381,7 @@ class ST_Operator:
              
             data_l1m_l2m={}
             for j2 in range(j3+1): 
-                data_l1m_l2 = self.wavelet_op.apply(data_l1m[j2],j3) # (Nb,Nc,L2,L3,N3)
+                data_l1m_l2 = self.wavelet_op.apply(data_l1m[j2],j=j3) # (Nb,Nc,L2,L3,N3)
                 # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
                 data_st.S3[:,:,j2,j3,:,:] = data_l1m_l2[:,:,None].cov(          #(Nb,Nc, 1,L3,N3)
                                  data_l1                                        #(Nb,Nc, 1,L3,N3)
@@ -394,12 +394,13 @@ class ST_Operator:
                     data_st.S4[:,:,j1,j2,j3,:,:,:] = data_l1m_l2m[j1][:,:,None,:].cov(
                             data_l1m_l2m[j2][:,:,:,None]
                             )         
-                            
-            # Downsample at Nj3
-            l_data.downsample(j3+1)                  #(Nb,Nc,j3+1,L,N3)
-            for j2 in range(j3+1): 
-                data_l1m[j2].downsample(j3+1)                 #(Nb,Nc,j3+1,L,N3)
-            
+
+            if data_st.DT != '2D_FFT_Torch':
+                # Downsample at Nj3
+                l_data.downsample(j3+1)                  #(Nb,Nc,j3+1,L,N3)
+                for j2 in range(j3+1): 
+                    data_l1m[j2].downsample(j3+1)                 #(Nb,Nc,j3+1,L,N3)
+                
         ########################################
         # Additional transform/compression
         ########################################
