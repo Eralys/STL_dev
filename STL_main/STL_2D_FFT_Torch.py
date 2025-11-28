@@ -9,14 +9,6 @@ class STL_2D_FFT_Torch:
     """
     Class for 2D planar STL FFT using PyTorch
     """
-
-    @staticmethod
-    def to_array(data):
-        """
-        Convert input to a PyTorch array.
-        """
-        array = torch.as_tensor(data)
-        return array
     
     @staticmethod
     def copy_array(data):
@@ -335,7 +327,7 @@ class STL_2D_FFT_Torch:
     
         
 
-    def get_wavelet_op(self, L=4, J=None, WType="Crappy"):
+    def get_wavelet_op(self, J=None, L=4, WType="Crappy"):
     
         # Default values
         if J is None:
