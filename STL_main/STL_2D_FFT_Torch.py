@@ -18,13 +18,13 @@ class STL_2D_FFT_Torch:
         array = torch.as_tensor(data)
         return array
     
-    @staticmethod
-    def copy_array(data):
-        """
-        Copies input PyTorch array.
-        """
-        array = copy(data)
-        return array
+    # @staticmethod
+    # def copy_array(data):
+    #     """
+    #     Copies input PyTorch array.
+    #     """
+    #     array = copy(data)
+    #     return array
 
     @staticmethod    
     def cov(array1, fourier_status1, array2, fourier_status2, mask, remove_mean=False):
@@ -98,7 +98,7 @@ class STL_2D_FFT_Torch:
 
         fourier_status: True if data is in Fourier space.
         """
-        self.array = self.__class__.to_array(data)
+        self.array = self.__class__.to_array(data) if data is not None else None
         self.fourier_status = fourier_status
 
         self.DT = '2D_FFT_Torch'
@@ -136,32 +136,34 @@ class STL_2D_FFT_Torch:
            copy of self
         """
         
-        new_instance = deepcopy(self)
-
-        # New array value, which can be a copy
-        if empty:
-            new_instance.array = None
-        
-        return new_instance
+        return self.__class__(self.array if not empty else None, 
+                              fourier_status=self.fourier_status)
     
 
     
-    def modulus(self):
+    def modulus(self, inplace=False):
         """
         Take the modulus of the array attribute.
 
         Parameters
         ----------
-        array : torch.Tensor
-            Input tensor.
+        inplace: bool
+            if inplace is True, overwrites self.array by its modulus.
         
         Returns
         -------
         torch.Tensor
             Modulus of input tensor.
         """
+        
+        if inplace:
+            output = self
+        else:
+            output = self.copy()
+
+        output.array = output.array.abs()
     
-        return self.array.abs()
+        return output
 
     def mean(self, square=False, mask=None):
         """
@@ -191,7 +193,7 @@ class STL_2D_FFT_Torch:
         if self.fourier_status is True:
             raise Exception("Mean in Fourier space is yet not implemented.") 
         else: # Real space
-            if square is False:
+            if square==False:
                 return torch.mean(self.array * mask, dim=(-2, -1))
             else:
                 return torch.mean((self.array.abs())**2 * mask, dim=(-2, -1)) 
@@ -301,7 +303,7 @@ class STL_2D_FFT_Torch:
             return self.array, self.fourier_status
         
 
-    def get_wavelet_op(self, L=4, J=None, WType="Crappy"):
+    def get_wavelet_op(self, J=None, L=4, WType="Crappy"):
     
         # Default values
         if J is None:
@@ -507,6 +509,7 @@ class CrappyWavelateOperator2D_FFT_torch:
         Constructor, see details above.
         '''
         # Main parameters
+        self.DT = '2D_FFT_Torch'
         self.N0 = N0
         self.J = J
         self.L = L

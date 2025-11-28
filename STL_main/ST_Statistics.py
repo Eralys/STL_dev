@@ -345,151 +345,184 @@ class ST_Statistics:
 
 
     ########################################
-    def plot_coeff(self, b=0, c=0, hold=False, color=None, figsize=(16, 12)):
+    def plot_coeff(self, b: int = 0, c: int = 0, new_figure: bool = True):
         """
-        Plot scattering covariance coefficients as curves.
+        Reproduce the classical S1/S2/S3/S4 scattering plot for a given (batch, channel).
 
         Parameters
         ----------
         b : int
-            Batch index.
+            Batch index (0 <= b < Nb).
         c : int
-            Channel index.
-        hold : bool
-            If False, clear the figure before plotting new curves.
-        color : str or None
-            Color for curves (matplotlib format).
-        figsize : tuple
-            Size of figure when hold=False.
-
-        Behavior
-        --------
-        - S1(j,l) : one curve per orientation l.
-        - S2(j,l) : one curve per orientation l.
-        - S3(j1,j2,l1,l2) :
-             * Panel per (l1,l2)
-             * For each panel: x=j1, curves for each j2.
-        - S4(j1,j2,j3,l1,l2,l3) :
-             * Panel per (l1,l2,l3)
-             * For each panel: x=j1, curves for each j2 and j3 fixed.
+            Channel index (0 <= c < Nc).
+        new_figure : bool
+            If True, create a new figure. If False, plot into the existing one
+            (useful to overlay multiple ST_statistic objects on the same panels).
         """
 
-        if not hold:
-            plt.figure(figsize=figsize)
-            plt.clf()
+        # ---- extract S1..S4 for one (b,c) and convert to numpy ----
+        def to_np(x):
+            if isinstance(x, bk.Tensor):
+                return x.detach().cpu().numpy()
+            return np.asarray(x)
 
-        Nb, Nc, J, L = self.Nb, self.Nc, self.J, self.L
-        if b >= Nb or c >= Nc:
-            raise IndexError("b or c index out of range.")
+        if self.S1 is None:
+            raise ValueError("S1 is None; nothing to plot.")
 
-        ###########################################################################
-        # -----------  S1 : (J, L)  ----------- #
-        ###########################################################################
-        if hasattr(self, "S1") and self.S1 is not None:
-            S1 = self._to_np(self.S1[b, c])  # (J, L)
+        S1_bc = to_np(self.S1[b, c])   # (J, L)
+        S2_bc = to_np(self.S2[b, c])   # (J, L)
+        S3_bc = to_np(self.S3[b, c])   # (J, J, L, L)
+        S4_bc = to_np(self.S4[b, c])   # (J, J, J, L, L, L)
 
-            plt.subplot(2, 2, 1)
-            for l in range(L):
-                y = S1[:, l]
-                mask = ~np.isnan(y)
-                if np.any(mask):
-                    plt.plot(np.arange(J)[mask], y[mask], color=color, label=f"L={l}")
-            plt.title("S1(j1,l)")
-            plt.xlabel("j1")
-            plt.ylabel("S1")
-            plt.grid(True)
-            plt.legend()
+        # Put a fake 'image' dimension of size 1 to match the old plotting code
+        S1 = S1_bc[None, ...]  # (1, J, L)
+        S2 = S2_bc[None, ...]  # (1, J, L)
 
-        ###########################################################################
-        # -----------  S2 : (J, L)  ----------- #
-        ###########################################################################
-        if hasattr(self, "S2") and self.S2 is not None:
-            S2 = self._to_np(self.S2[b, c])  # (J, L)
+        # ---- build the compact index arrays for S3 and S4 as in your old code ----
+        J = S1.shape[1]
+        N_orient = S1.shape[2]
 
-            plt.subplot(2, 2, 2)
-            for l in range(L):
-                y = S2[:, l]
-                mask = ~np.isnan(y)
-                if np.any(mask):
-                    plt.plot(np.arange(J)[mask], y[mask], color=color, label=f"L={l}")
-            plt.title("S2(j1,l)")
-            plt.xlabel("j1")
-            plt.ylabel("S2")
-            plt.grid(True)
-            plt.legend()
+        # count combinations for S3 and S4
+        n_s3 = 0
+        n_s4 = 0
+        for j3 in range(J):
+            for j2 in range(j3 + 1):
+                n_s3 += 1
+                for j1 in range(j2 + 1):
+                    n_s4 += 1
 
-        ###########################################################################
-        # -----------  S3 : (J,J,L,L)  ----------- #
-        ###########################################################################
-        if hasattr(self, "S3") and self.S3 is not None:
-            S3 = self._to_np(self.S3[b, c])  # (J, J, L, L)
+        j1_s3 = np.zeros(n_s3, dtype=int)
+        j2_s3 = np.zeros(n_s3, dtype=int)
 
-            # On ouvre une figure dédiée pour S3 si hold=False (car beaucoup de panels)
-            if not hold:
-                fig3 = plt.figure(figsize=(14, 10))
-                fig3.suptitle("S3(j1,j2,l1,l2)")
+        j1_s4 = np.zeros(n_s4, dtype=int)
+        j2_s4 = np.zeros(n_s4, dtype=int)
+        j3_s4 = np.zeros(n_s4, dtype=int)
 
-            panel = 1
-            for l1 in range(L):
-                for l2 in range(L):
-                    if not hold:
-                        plt.subplot(L, L, panel)
-                    panel += 1
+        n_s3 = 0
+        n_s4 = 0
+        for j3 in range(J):
+            for j2 in range(0, j3 + 1):
+                j1_s3[n_s3] = j2
+                j2_s3[n_s3] = j3
+                n_s3 += 1
+                for j1 in range(0, j2 + 1):
+                    j1_s4[n_s4] = j1
+                    j2_s4[n_s4] = j2
+                    j3_s4[n_s4] = j3
+                    n_s4 += 1
 
-                    # S3[j1, j2] (fix l1,l2)
-                    S = S3[:, :, l1, l2]  # shape (J,J)
+        # Now we build compact S3 and S4 arrays with shape
+        #   S3: (1, n_s3, L, L)
+        #   S4: (1, n_s4, L, L, L)
+        S3 = np.zeros((1, len(j1_s3), N_orient, N_orient), dtype=S3_bc.dtype)
+        S4 = np.zeros((1, len(j1_s4), N_orient, N_orient, N_orient), dtype=S4_bc.dtype)
 
-                    for j2 in range(J):
-                        y = S[:, j2]
-                        mask = ~np.isnan(y)
-                        if np.any(mask):
-                            plt.plot(np.arange(J)[mask], y[mask],
-                                     color=color, label=f"j2={j2}")
+        for idx in range(len(j1_s3)):
+            j1 = j1_s3[idx]
+            j2 = j2_s3[idx]
+            S3[0, idx, :, :] = S3_bc[j1, j2, :, :]
 
-                    if not hold:
-                        plt.title(f"S3 l1={l1}, l2={l2}")
-                        plt.xlabel("j1")
-                        plt.ylabel("coef")
-                        plt.grid(True)
-                        # (pas de légende pour éviter surcharge visuelle)
+        for idx in range(len(j1_s4)):
+            j1 = j1_s4[idx]
+            j2 = j2_s4[idx]
+            j3 = j3_s4[idx]
+            S4[0, idx, :, :, :] = S4_bc[j1, j2, j3, :, :, :]
 
-        ###########################################################################
-        # -----------  S4 : (J,J,J,L,L,L)  ----------- #
-        ###########################################################################
-        if hasattr(self, "S4") and self.S4 is not None:
-            S4 = self._to_np(self.S4[b, c])  # (J, J, J, L, L, L)
+        # ---- now we reproduce your original plot_scat(S1,S2,S3,S4) ----
+        color = ['b', 'r', 'orange', 'pink']
+        symbol = ['', ':', '-', '.']
 
-            # Figure dédiée
-            if not hold:
-                fig4 = plt.figure(figsize=(16, 12))
-                fig4.suptitle("S4(j1,j2,j3,l1,l2,l3)")
+        if new_figure:
+            plt.figure(figsize=(16, 12))
 
-            panel = 1
-            for l1 in range(L):
-                for l2 in range(L):
-                    for l3 in range(L):
-                        # trop de sous-graphiques si L grand : à ton goût !
-                        if not hold:
-                            plt.subplot(L**2, L, panel)
-                        panel += 1
+        # ----- S1 -----
+        plt.subplot(2, 2, 1)
+        for k in range(min(4, N_orient)):
+            plt.plot(S1[0, :, k],
+                     color=color[k % len(color)],
+                     label=rf'$\Theta = {k}$')
+        plt.legend(frameon=False, ncol=2)
+        plt.xlabel(r'$J_1$')
+        plt.ylabel(r'$S_1$')
+        plt.yscale('log')
 
-                        # S4[j1,j2,j3,l1,l2,l3]
-                        S = S4[:, :, :, l1, l2, l3]  # (J,J,J)
+        # ----- S2 -----
+        plt.subplot(2, 2, 2)
+        for k in range(min(4, N_orient)):
+            plt.plot(S2[0, :, k],
+                     color=color[k % len(color)],
+                     label=rf'$\Theta = {k}$')
+        plt.xlabel(r'$J_1$')
+        plt.ylabel(r'$S_2$')
+        plt.yscale('log')
 
-                        for j2 in range(J):
-                            for j3 in range(J):
-                                y = S[:, j2, j3]
-                                mask = ~np.isnan(y)
-                                if np.any(mask):
-                                    plt.plot(np.arange(J)[mask], y[mask],
-                                             color=color)
+        # ----- S3 -----
+        plt.subplot(2, 2, 3)
+        # nidx to separate groups of constant j1
+        nidx = np.concatenate(
+            [np.zeros([1], dtype=int),
+             np.cumsum(np.bincount(j1_s3, minlength=J))],
+            axis=0
+        )
+        l_pos = []
+        l_name = []
+        for i in np.unique(j1_s3):
+            idx = np.where(j1_s3 == i)[0]
+            for k in range(min(4, N_orient)):
+                for l in range(min(4, N_orient)):
+                    if i == 0:
+                        plt.plot(j2_s3[idx] + nidx[i],
+                                 S3[0, idx, k, l],
+                                 symbol[l % len(symbol)],
+                                 color=color[k % len(color)],
+                                 label=rf'$\Theta = {k},{l}$')
+                    else:
+                        plt.plot(j2_s3[idx] + nidx[i],
+                                 S3[0, idx, k, l],
+                                 symbol[l % len(symbol)],
+                                 color=color[k % len(color)])
+            l_pos += list(j2_s3[idx] + nidx[i])
+            l_name += [f"{j1_s3[m]},{j2_s3[m]}" for m in idx]
 
-                        if not hold:
-                            plt.title(f"S4 l1={l1},l2={l2},l3={l3}")
-                            plt.xlabel("j1")
-                            plt.ylabel("coef")
-                            plt.grid(True)
+        plt.legend(frameon=False, ncol=2)
+        plt.xticks(l_pos, l_name, fontsize=6)
+        plt.xlabel(r"$j_{1},j_{2}$", fontsize=9)
+        plt.ylabel(r"$S_{3}$", fontsize=9)
 
-        if not hold:
-            plt.tight_layout()
-            plt.show()
+        # ----- S4 -----
+        plt.subplot(2, 2, 4)
+        nidx = 0
+        l_pos = []
+        l_name = []
+        for i in np.unique(j1_s4):
+            for j in np.unique(j2_s4):
+                idx = np.where((j1_s4 == i) & (j2_s4 == j))[0]
+                for k in range(min(4, N_orient)):
+                    for l in range(min(4, N_orient)):
+                        for m in range(min(4, N_orient)):
+                            if i == 0 and j == 0 and m == 0:
+                                plt.plot(j2_s4[idx] + j3_s4[idx] + nidx,
+                                         S4[0, idx, k, l, m],
+                                         symbol[l % len(symbol)],
+                                         color=color[k % len(color)],
+                                         label=rf'$\Theta = {k},{l},{m}$')
+                            else:
+                                plt.plot(j2_s4[idx] + j3_s4[idx] + nidx,
+                                         S4[0, idx, k, l, m],
+                                         symbol[l % len(symbol)],
+                                         color=color[k % len(color)])
+                l_pos += list(j2_s4[idx] + j3_s4[idx] + nidx)
+                l_name += [f"{j1_s4[m]},{j2_s4[m]},{j3_s4[m]}" for m in idx]
+            # increment nidx to separate groups of constant j1
+            sel = (j1_s4 == i)
+            if np.any(sel):
+                span = (j2_s4[sel] + j3_s4[sel])
+                nidx += int(np.max(span) - np.min(span) + 1)
+
+        plt.legend(frameon=False, ncol=2)
+        plt.xticks(l_pos, l_name, fontsize=6, rotation=90)
+        plt.xlabel(r"$j_{1},j_{2},j_{3}$", fontsize=9)
+        plt.ylabel(r"$S_{4}$", fontsize=9)
+
+        plt.tight_layout()
+        plt.show()

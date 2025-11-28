@@ -240,13 +240,13 @@ class STL_Healpix_Kernel_Torch:
         return new
 
     ###########################################################################
-    def modulus(self, copy=False):
+    def modulus(self, inplace=False):
         """
         Compute the modulus (absolute value) of the data.
 
         For complex data, uses torch.abs. For real data, it is just |x|.
         """
-        data = self.copy(empty=False) if copy else self
+        data = self.copy(empty=False) if not inplace else self
 
         if data.MR:
             data.array = [torch.abs(a) for a in data.array]
@@ -406,7 +406,7 @@ class STL_Healpix_Kernel_Torch:
         return new_array.to(self.device), cid_out_t, nside_out
 
     ###########################################################################
-    def downsample(self, dg_out, copy=False):
+    def downsample(self, dg_out, inplace=True):
         """
         Downsample the data to a coarser dg_out level using Healpix ud_grade_2.
 
@@ -438,9 +438,7 @@ class STL_Healpix_Kernel_Torch:
         if dg_out < self.dg:
             raise ValueError("Requested dg_out < current dg; upsampling not supported.")
 
-        data = self.copy(empty=False) if copy else self
-        
-        
+        data = self.copy(empty=False) if not inplace else self
 
         # Number of single steps we need
         dg_inc = dg_out - data.dg
@@ -482,7 +480,7 @@ class STL_Healpix_Kernel_Torch:
 
         for dg in range(dg_max + 1):
             if dg > 0:
-                tmp = tmp.downsample(dg, copy=True)
+                tmp = tmp.downsample(dg, inplace=True)
             list_arrays.append(tmp.array)
             list_cids.append(tmp.cell_ids)
             list_dg.append(dg)
@@ -678,7 +676,7 @@ class WavelateOperatorHealpixKernel_torch:
         out.list_dg = None
         return out
         
-    def apply_smooth(self, data: STL_Healpix_Kernel_Torch, copy: bool = False):
+    def apply_smooth(self, data: STL_Healpix_Kernel_Torch, inplace: bool = True):
         """
         Smooth the data by convolving with a smooth kernel derived from the
         wavelet orientation 0. The data shape is preserved.
@@ -728,7 +726,7 @@ class WavelateOperatorHealpixKernel_torch:
         y = y_bc.reshape(*leading, K)  # same shape as input x
 
         # Copy or in-place update
-        out = data.copy(empty=True) if copy else data
+        out = data.copy(empty=True) if not inplace else data
         out.array = y
         # metadata stays identical (nside, N0, dg, cell_ids, ...)
         return out
