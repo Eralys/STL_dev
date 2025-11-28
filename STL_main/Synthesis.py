@@ -47,7 +47,7 @@ def optimize_scattering_LBFGS(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     use_NaN = np.sum(np.isnan(target))>0
     if use_NaN:
-        print('NaN detected in the target, the synthesis take it into account')
+        print('NaN detected in the target, the synthesis takes it into account')
         
     target = torch.as_tensor(target, device=device, dtype=torch.float32)
 

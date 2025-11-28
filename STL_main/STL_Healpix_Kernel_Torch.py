@@ -571,6 +571,81 @@ class WavelateOperatorHealpixKernel_torch:
         # metadata stays identical (nside, N0, dg, cell_ids, ...)
         return out
         
+    def _smooth_with_nan(self, data: STL_Healpix_Kernel_Torch, inplace: bool = True):
+        """
+        Smooth the data by convolving with a smooth kernel derived from the
+        wavelet kernel, handling NaNs:
+
+          - NaNs are treated as missing values.
+          - We convolve both the data (with NaNs replaced by 0) and a mask
+            of valid pixels.
+          - The result is num / w_sum, i.e. normalized by the sum of weights
+            of valid pixels (nan-aware smoothing).
+
+        Parameters
+        ----------
+        data : STL_Healpix_Kernel_Torch
+            Input Healpix data with array of shape [..., K] and cell_ids aligned.
+        inplace : bool
+            If True, modify `data` in-place. Otherwise, work on a copy.
+
+        Returns
+        -------
+        STL_Healpix_Kernel_Torch
+            Smoothed data object with same shape as input.
+        """
+        x = data.array           # [..., K]
+        cid = data.cell_ids
+        *leading, K = x.shape
+
+        # Work on a copy or not
+        out = data if inplace else data.copy(empty=False)
+
+        # Flatten leading dims into (B, 1, K)
+        if leading:
+            B = int(np.prod(leading))
+        else:
+            B = 1
+        x_bc = x.reshape(B, 1, K)   # (B, 1, K)
+
+        # Build mask of valid pixels (1 for valid, 0 for NaN)
+        mask_valid = ~torch.isnan(x_bc)          # (B,1,K) bool
+        mask_f = mask_valid.to(x_bc.dtype)       # float
+        # Replace NaN by 0 so they do not contribute
+        x_filled = torch.where(mask_valid, x_bc, torch.zeros_like(x_bc))
+
+        # Smooth kernel (Ci=1, Co=1, P)
+        # Here we take magnitude of the wavelet kernel and normalize it
+        w_smooth = self.kernel.abs().to(device=data.device, dtype=data.dtype)   # (1,1,P)
+        w_smooth = w_smooth / (w_smooth.sum(dim=-1, keepdim=True) + 1e-12)
+
+        stencil = self._get_stencil(data.dg, cid, self.KERNELSZ, n_gauges=1)
+        if (stencil.device != data.device) or (stencil.dtype != data.dtype):
+            stencil.device = data.device
+            stencil.dtype = data.dtype
+
+        cid_np = cid.detach().cpu().numpy().astype(np.int64)
+
+        # Convolution on sphere for data and mask
+        num = stencil.Convol_torch(x_filled, w_smooth, cell_ids=cid_np)   # (B,1,K)
+        w_sum = stencil.Convol_torch(mask_f,   w_smooth, cell_ids=cid_np) # (B,1,K)
+
+        if not isinstance(num, torch.Tensor):
+            num = torch.as_tensor(num, device=data.device, dtype=data.dtype)
+        if not isinstance(w_sum, torch.Tensor):
+            w_sum = torch.as_tensor(w_sum, device=data.device, dtype=data.dtype)
+
+        eps = 1e-8
+        y_bc = num / (w_sum + eps)               # (B,1,K)
+        y_bc = y_bc.reshape(*leading, K)         # [..., K]
+
+        # Pixels with no valid neighbors in the smoothing kernel -> NaN
+        no_valid = (w_sum <= 0).reshape(*leading, K)
+        y_bc = torch.where(no_valid, torch.full_like(y_bc, float("nan")), y_bc)
+
+        out.array = y_bc
+        return out
+
     ###########################################################################
     def downsample(self, data:STL_Healpix_Kernel_Torch ,dg_out: int, inplace: bool = True, smooth: bool = True):
         """
@@ -666,3 +741,113 @@ class WavelateOperatorHealpixKernel_torch:
 
         return data
 
+    ###########################################################################
+    def nandownsample(self, data: STL_Healpix_Kernel_Torch,
+                      dg_out: int,
+                      inplace: bool = True,
+                      smooth: bool = True):
+        """
+        Nan-aware downsampling of Healpix data to a coarser dg_out level,
+        using NESTED binning and nanmean:
+
+        Logic
+        -----
+        - Optionally smooth the map at current resolution with nan-aware
+          smoothing (see _smooth_with_nan) to remove small scales.
+        - Group pixels by their parent index in NESTED scheme:
+              parent_id = cell_id // 4**Δg
+          where Δg = dg_out - dg.
+        - For each parent pixel and each batch element, compute the nanmean
+          of children values:
+              sum(children_valid) / count(children_valid).
+
+        Only supports MR == False.
+
+        Parameters
+        ----------
+        data : STL_Healpix_Kernel_Torch
+            Input data at resolution dg.
+        dg_out : int
+            Target downgrading level (dg_out >= data.dg >= 0).
+        inplace : bool
+            If True, modify `data` in-place.
+            If False, return a new STL_Healpix_Kernel_Torch.
+        smooth : bool
+            If True, apply nan-aware smoothing before binning.
+
+        Returns
+        -------
+        STL_Healpix_Kernel_Torch
+            Data at the desired dg_out resolution.
+        """
+        if data.MR:
+            raise ValueError("nandownsample only supports MR == False.")
+
+        dg_out = int(dg_out)
+        if dg_out < 0:
+            raise ValueError("dg_out must be non-negative.")
+        if dg_out < data.dg:
+            raise ValueError("Requested dg_out < current dg; upsampling not supported.")
+
+        # Trivial case
+        if dg_out == data.dg:
+            return data if inplace else data.copy(empty=False)
+
+        # Work on a copy or in-place
+        data = data if inplace else data.copy(empty=False)
+
+        # 1) Optional nan-aware smoothing
+        if smooth:
+            data = self._smooth_with_nan(data, inplace=True)
+
+        # 2) Binning in NESTED scheme with nanmean
+        delta_g = dg_out - data.dg
+        factor_pix = 4 ** delta_g  # 4^Δg children per parent in NESTED
+
+        cid = data.cell_ids  # (K,)
+        parent_ids = cid // factor_pix  # (K,)
+
+        x = data.array  # [..., K]
+        *leading, K = x.shape
+        if leading:
+            B = int(np.prod(leading))
+        else:
+            B = 1
+
+        # Flatten leading dims into batch dimension: (B, K)
+        x_flat = x.reshape(B, K)
+
+        # Handle NaNs: build mask of valid children
+        mask_valid = ~torch.isnan(x_flat)
+        mask_f = mask_valid.to(x_flat.dtype)
+        x_filled = torch.where(mask_valid, x_flat, torch.zeros_like(x_flat))
+
+        # Unique parent indices and inverse mapping from children -> parent
+        parent_unique, inv = torch.unique(parent_ids, return_inverse=True)
+        Kc = parent_unique.numel()  # number of coarse pixels
+
+        # Scatter-add sums into coarse bins (per batch)
+        idx = inv.unsqueeze(0).expand(B, -1)  # (B, K)
+
+        out_sum = torch.zeros(B, Kc, device=x_flat.device, dtype=x_flat.dtype)
+        out_sum.scatter_add_(1, idx, x_filled)
+
+        out_count = torch.zeros(B, Kc, device=x_flat.device, dtype=x_flat.dtype)
+        out_count.scatter_add_(1, idx, mask_f)
+
+        eps = 1e-8
+        out = out_sum / (out_count + eps)  # nan-aware mean
+        # No valid child for some parent in a given batch → NaN
+        no_valid_parent = out_count <= 0
+        out = torch.where(no_valid_parent, torch.full_like(out, float("nan")), out)
+
+        # Reshape back to original leading dims + coarse pixel axis
+        y = out.reshape(*leading, Kc)
+
+        # Update data object
+        data.array = y
+        data.cell_ids = parent_unique.to(device=data.device, dtype=torch.long)
+        data.dg = dg_out
+        data.nside = data.N0[0] // (2 ** dg_out)
+
+        return data
