@@ -264,7 +264,7 @@ class STL_2D_FFT_Torch:
             raise Exception("Masks are not supported in DT1") 
             
         if dg_out == self.dg:
-            return self.array, self.fourier_status
+            return self
         
         # Tuning parameter to keep the aspect ratio and a unified resolution
         min_x, min_y = 8, 8
@@ -300,10 +300,13 @@ class STL_2D_FFT_Torch:
                 ),-1) * np.sqrt(dx * dy / dx_cur / dy_cur)
             
             self.array = array_dg
-            return self.out_fourier(O_fourier)
+            if O_fourier == False:
+                self.array = self.out_fourier(O_fourier)
+                self.fourier_status = False
+            return self
 
         else:
-            return self.array
+            return self
         
     def out_fourier(self, O_fourier):
         """
@@ -332,7 +335,6 @@ class STL_2D_FFT_Torch:
             data = self.copy()
     
         return data
-    
         
 
     def get_wavelet_op(self, L=4, J=None, WType="Crappy"):
