@@ -323,13 +323,14 @@ class STL_2D_Kernel_Torch:
             h, w = y.shape[-2:]
             if h % 2 != 0 or w % 2 != 0:
                 raise ValueError("Downsampling requires even spatial dimensions at each step.")
-            
             sigma = 1.0
             kernel, kernel_size = get_gaussian_kernel(sigma, dtype=y.dtype)
             kernel = kernel.to(y.device)
-            padding = kernel_size // 2
-            
-            y = F.conv2d(y, kernel, padding=padding)
+            # Add circular padding for periodic boundaries
+            pad = kernel_size // 2
+            y_padded = F.pad(y, (pad, pad, pad, pad), mode='circular')
+            y = F.conv2d(y_padded, kernel)
+            # Now downsample with 2x2 mean pooling
             y = F.avg_pool2d(y, kernel_size=2, stride=2)
 
         H2, W2 = y.shape[-2:]
@@ -647,7 +648,7 @@ class STL_2D_Kernel_Torch:
         if kernel_size is None:
             kernel_size = 5
         if J is None:
-            J = np.min([int(np.log2(self.N0[0])),int(np.log2(self.N0[1]))])-3
+            J = np.min([int(np.log2(self.N0[0])),int(np.log2(self.N0[1]))])-2
         
         return WavelateOperator2Dkernel_torch(kernel_size,L,J,
                                               device=self.array.device,dtype=self.array.dtype)

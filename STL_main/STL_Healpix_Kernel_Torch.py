@@ -332,6 +332,146 @@ class STL_Healpix_Kernel_Torch:
         cov = (x_c * y_c.conj()).mean(dim=dim)
         return cov
 
+        ###########################################################################
+    def _smooth_inplace(self):
+        """
+        Smooth the data in-place using self.smooth_kernel and SphericalStencil.Convol_torch.
+        Shape of the data is preserved.
+
+        This is equivalent to the smoothing part of the old _downsample_once,
+        but without any change of resolution.
+        """
+        kernel_sz = int(np.sqrt(self.smooth_kernel.shape[-1]))
+
+        nside_in = self.nside
+        cid_np = self.cell_ids.detach().cpu().numpy().astype(np.int64)
+
+        x = self.array
+        *leading, K = x.shape
+        if leading:
+            B = int(np.prod(leading))
+        else:
+            B = 1
+
+        x_bc = x.reshape(B, 1, K)
+
+        # Build SphericalStencil with the current nside
+        stencil = SphericalStencil(
+            nside=nside_in,
+            kernel_sz=kernel_sz,
+            nest=self.nest,
+            cell_ids=cid_np,
+            n_gauges=1,
+            gauge_type='cosmo',
+            device=self.device,
+            dtype=self.dtype,
+        )
+
+        # Smooth via convolution on the sphere: (B,1,K) -> (B,1,K)
+        w_smooth = self.smooth_kernel.to(device=self.device, dtype=self.dtype)
+        y_bc = stencil.Convol_torch(x_bc, w_smooth, cell_ids=cid_np, nside=nside_in)
+
+        if not isinstance(y_bc, torch.Tensor):
+            y_bc = torch.as_tensor(y_bc, device=self.device, dtype=self.dtype)
+
+        y = y_bc.reshape(*leading, K)
+        self.array = y
+    
+        ###########################################################################
+    def downsample(self, dg_out: int, inplace: bool = True, smooth: bool = True):
+        """
+        Downsample the data to a coarser dg_out level in one step, using NESTED
+        binning on HEALPix indices.
+
+        Logic:
+          - Optionally smooth the map at current resolution to remove small scales.
+          - Group pixels by their parent index in NESTED scheme:
+                parent_id = cell_id // 4**Δg
+            where Δg = dg_out - dg.
+          - For each parent pixel, average all children pixels' values.
+
+        Only supports MR == False.
+
+        Parameters
+        ----------
+        dg_out : int
+            Target downgrading level (dg_out >= self.dg >= 0).
+        inplace : bool
+            If True, modify the current object.
+            If False, return a new object and leave self unchanged.
+        smooth : bool
+            If True, apply smoothing before binning.
+
+        Returns
+        -------
+        STL_Healpix_Kernel_Torch
+            Data at the desired dg_out resolution.
+        """
+        if self.MR:
+            raise ValueError("downsample only supports MR == False.")
+
+        dg_out = int(dg_out)
+        if dg_out < 0:
+            raise ValueError("dg_out must be non-negative.")
+
+        if dg_out < self.dg:
+            raise ValueError("Requested dg_out < current dg; upsampling not supported.")
+
+        # Trivial case
+        if dg_out == self.dg:
+            return self if inplace else self.copy(empty=False)
+
+        # Work on a copy or in-place
+        data = self if inplace else self.copy(empty=False)
+
+        # 1) Smoothing step (optional)
+        if smooth:
+            data._smooth_inplace()
+
+        # 2) Binning in NESTED scheme
+        delta_g = dg_out - data.dg
+        factor_pix = 4 ** delta_g  # 4^Δg children per parent in NESTED
+
+        cid = data.cell_ids  # (K,)
+        # Parent indices in NESTED
+        parent_ids = cid // factor_pix  # (K,)
+
+        # We want to average data.array[..., K] over these parent_ids
+        x = data.array
+        *leading, K = x.shape
+        if leading:
+            B = int(np.prod(leading))
+        else:
+            B = 1
+
+        # Flatten leading dims into batch dimension: (B, K)
+        x_flat = x.reshape(B, K)
+
+        # Unique parent indices and inverse mapping
+        parent_unique, inv = torch.unique(parent_ids, return_inverse=True)
+        Kc = parent_unique.numel()  # number of coarse pixels
+
+        # Scatter-add sums into coarse bins
+        out = torch.zeros(B, Kc, device=x.device, dtype=x.dtype)
+        idx = inv.unsqueeze(0).expand(B, -1)  # (B, K)
+        out.scatter_add_(1, idx, x_flat)
+
+        # Compute counts per coarse pixel (non-zero by construction)
+        counts = torch.bincount(inv, minlength=Kc).to(x.dtype)  # (Kc,)
+        out = out / counts.unsqueeze(0)  # broadcast over batch
+
+        # Reshape back to original leading dims + coarse pixel axis
+        y = out.reshape(*leading, Kc)
+
+        # Update data object
+        data.array = y
+        data.cell_ids = parent_unique.to(device=data.device, dtype=torch.long)
+        data.dg = dg_out
+        # New nside from N0 and dg_out (conceptually underlying grid)
+        data.nside = data.N0[0] // (2 ** dg_out)
+
+        return data
+    '''
     ###########################################################################
     def _downsample_once(self, max_poll=False):
         """
@@ -450,7 +590,8 @@ class STL_Healpix_Kernel_Torch:
             data.dg += 1
 
         return data
-
+    '''
+    
     ###########################################################################
     def downsample_toMR(self, dg_max):
         """

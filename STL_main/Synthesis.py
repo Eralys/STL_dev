@@ -29,7 +29,7 @@ class ScatteringMatchModel(nn.Module):
 
     def forward(self):
         DC_u = self.STLDataClass(self.u)
-        st_u = self.st_op.apply(DC_u)#,norm='load_ref')
+        st_u = self.st_op.apply(DC_u,norm='load_ref')
         s_flat_u = st_u.to_flatten()
         return s_flat_u
 
@@ -51,7 +51,7 @@ def optimize_scattering_LBFGS(
     DC_target = STLDataClass(target)
     st_op = SO_class(DC_target)
     with torch.no_grad():
-        r = st_op.apply(DC_target).to_flatten() #,norm='store_ref').to_flatten()
+        r = st_op.apply(DC_target,norm='store_ref').to_flatten()
     r = r.detach()
 
     # Model with learnable u

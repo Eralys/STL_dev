@@ -138,9 +138,10 @@ class ST_Statistics:
         Parameters
         ----------
         - norm : str
-            type of norm (“S2”, “S2_ref”)
+            type of norm (“self”, “from_ref”)
         - S2_ref : array
-            array of reference S2 coefficients
+            array of reference S2 coefficients if "from_ref"
+            
         '''
         
         # Check the proper ordering
@@ -156,7 +157,7 @@ class ST_Statistics:
             pass
             
         # Store_ref normalization
-        elif norm == "store_ref":
+        elif norm == "self":
             # Verifications
             if self.norm:
                 raise Exception("ST statistics are already normalized")
@@ -171,7 +172,7 @@ class ST_Statistics:
             self.S2_ref = S2_ref
 
         # Load_ref normalization
-        elif norm == "load_ref":
+        elif norm == "from_ref":
             # Verifications
             if self.norm:
                 raise Exception("ST statistics are already normalized")
