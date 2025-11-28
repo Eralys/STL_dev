@@ -119,7 +119,7 @@ class ST_Operator:
         self.N0 = data.N0
         
         # Wavelet transform and related parameters
-        self.wavelet_op = data.get_wavelet_op(J,L) #Wavelet_Operator(DT, N0, J, L, WType)
+        self.wavelet_op = data.get_wavelet_op(J=J, L=L) #Wavelet_Operator(DT, N0, J, L, WType)
         self.J = self.wavelet_op.J
         self.L = self.wavelet_op.L
         self.WType = self.wavelet_op.WType
@@ -369,11 +369,10 @@ class ST_Operator:
         l_data=data.copy()
         ### Higher order computation ###
         for j3 in range(J):
-            
             # Compute first convolution and modulus
+            
             data_l1 = self.wavelet_op.apply(l_data,j3)                  #(Nb,Nc,L,N3)
             data_l1m[j3] = data_l1.modulus(inplace=False)                #(Nb,Nc,L,N3) 
-            
             
             # Compute S1 and S2
             

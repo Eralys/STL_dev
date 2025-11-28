@@ -24,12 +24,12 @@ class ScatteringMatchModel(nn.Module):
         # Learnable field u
         self.u = STLDataClass(torch.randn(init_shape, device=device, dtype=dtype))
         w_op = self.u.get_wavelet_op()
-        self.u = nn.Parameter(w_op.apply_smooth(self.u,copy=True).array)
+        self.u = nn.Parameter(w_op.apply_smooth(self.u,inplace=False).array)
         
 
     def forward(self):
         DC_u = self.STLDataClass(self.u)
-        st_u = self.st_op.apply(DC_u) #,norm='load_ref')
+        st_u = self.st_op.apply(DC_u)#,norm='load_ref')
         s_flat_u = st_u.to_flatten()
         return s_flat_u
 
@@ -41,6 +41,7 @@ def optimize_scattering_LBFGS(
     max_iter=100,
     lr=1.0,
     history_size=50,
+    print_iter=10,
     verbose=True,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -84,7 +85,8 @@ def optimize_scattering_LBFGS(
         loss_val = loss.item()
         loss_history.append(loss_val)
         if verbose:
-            print(f"[LBFGS] inner iter {len(loss_history)}, loss = {loss_val:.6e}")
+            if len(loss_history)%print_iter==0:
+                print(f"[LBFGS] inner iter {len(loss_history)}, loss = {loss_val:.6e}")
 
         return loss
 

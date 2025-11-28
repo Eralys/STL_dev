@@ -390,7 +390,7 @@ class STL_2D_Kernel_Torch:
         return mask_MR.array[idx]
 
     ###########################################################################
-    def downsample(self, dg_out, mask_MR=None, copy=False):
+    def downsample(self, dg_out, mask_MR=None, inplace=True):
         """
         Downsample the data to the dg_out resolution.
         Only supports MR == False.
@@ -407,9 +407,8 @@ class STL_2D_Kernel_Torch:
         if dg_out < self.dg:
             raise ValueError("Requested dg_out < current dg; upsampling not supported.")
 
-        data = self.copy(empty=False) if copy else self
+        data = self.copy(empty=False) if not inplace else self
         dg_inc = dg_out - data.dg
-
         if dg_inc > 0:
             data.array = self._downsample_tensor(data.array, dg_inc)
             data.dg = dg_out
@@ -420,7 +419,6 @@ class STL_2D_Kernel_Torch:
             if mask.shape[-2:] != data.array.shape[-2:]:
                 raise ValueError("Mask and data have incompatible spatial shapes.")
             data.array = data.array * mask
-
         return data
     
     ###########################################################################
@@ -521,10 +519,10 @@ class STL_2D_Kernel_Torch:
         return data
     
     ###########################################################################
-    def smooth(self, copy=False):
+    def smooth(self, inplace=False):
         """Apply isotropic smoothing mirroring FoCUS.smooth 2D pathway."""
 
-        target = self.copy(empty=False) if copy else self
+        target = self.copy(empty=False) if not inplace else self
 
         def _apply_smooth(tensor: torch.Tensor) -> torch.Tensor:
             *leading, Nx, Ny = tensor.shape
@@ -542,11 +540,11 @@ class STL_2D_Kernel_Torch:
         return target
     
     ###########################################################################
-    def modulus(self, copy=False):
+    def modulus(self, inplace=False):
         """
         Compute the modulus (absolute value) of the data.
         """
-        data = self.copy(empty=False) if copy else self
+        data = self.copy(empty=False) if not inplace else self
 
         if data.MR:
             data.array = [torch.abs(a) for a in data.array]
@@ -643,33 +641,28 @@ class STL_2D_Kernel_Torch:
             
         return cov        
        
-    def get_wavelet_op(self, kernel_size=None,L=None,J=None):
-        
+    def get_wavelet_op(self, J=None, L=None, kernel_size=None):
         if L is None:
-            L=4
+            L = 4
         if kernel_size is None:
-            kernel_size=5
+            kernel_size = 5
         if J is None:
-            J=np.min([int(np.log2(self.N0[0])),int(np.log2(self.N0[1]))])-3
+            J = np.min([int(np.log2(self.N0[0])),int(np.log2(self.N0[1]))])-3
         
         return WavelateOperator2Dkernel_torch(kernel_size,L,J,
-            device=self.array.device,dtype=self.array.dtype)
+                                              device=self.array.device,dtype=self.array.dtype)
        
 
 class WavelateOperator2Dkernel_torch:
-    def __init__(self, kernel_size: int, L: int, J: int, device='cpu',dtype=torch.float):
-        """
-        kernel: torch.Tensor
-            Convolution kernel, either of shape [1, L, K, K] .
-            L is the number of output channels.
-        """
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.device=device
-        self.dtype=dtype
+    def __init__(self, kernel_size: int, L: int, J: int,
+                 device='cuda', dtype=torch.float):
+        self.KERNELSZ = kernel_size
+        self.L = L
+        self.J = J
+        self.device = torch.device(device)
+        self.dtype = dtype
         
         self.kernel = self._wavelet_kernel(kernel_size,L)
-        self.L=L
-        self.J=J
         self.WType='simple'
         
     def _wavelet_kernel(self,kernel_size: int,n_orientation: int,sigma=1):
@@ -741,3 +734,48 @@ class WavelateOperator2Dkernel_torch:
         convolved = _complex_conv2d_circular(x, weight)
 
         return STL_2D_Kernel_Torch(convolved,smooth_kernel=data.smooth_kernel,dg=data.dg,N0=data.N0)
+        
+    
+    def apply_smooth(self, data: STL_2D_Kernel_Torch, inplace: bool = False):
+        """
+        Smooth the data by convolving with a smooth kernel derived from the
+        wavelet orientation 0. The data shape is preserved.
+
+        Parameters
+        ----------
+        data : STL_Healpix_Kernel_Torch
+            Input Healpix data with array of shape [..., K] and cell_ids aligned.
+        copy : bool
+            If True, return a new STL_Healpix_Kernel_Torch instance.
+            If False, modify the input object in-place and return it.
+
+        Returns
+        -------
+        STL_Healpix_Kernel_Torch
+            Smoothed data object with same shape as input (no extra L dimension).
+        """
+        x = data.array  # [..., K]=
+        *leading, K1,K2 = x.shape
+
+        # Flatten leading dims into batch dimension: (B, Ci=1, K)
+        if leading:
+            B = int(np.prod(leading))
+        else:
+            B = 1
+        x_bc = x.reshape(B, 1, K1,K2)
+
+        # Smooth kernel (Ci=1, Co=1, P)
+        w_smooth = self.kernel.abs()[0,0:1].to(device=data.device, dtype=data.dtype)
+
+        y_bc = _conv2d_circular(x, w_smooth)
+        
+        if not isinstance(y_bc, torch.Tensor):
+            y_bc = torch.as_tensor(y_bc, device=data.device, dtype=data.dtype)
+
+        y = y_bc.reshape(*leading, K1,K2)  # same shape as input x
+
+        # Copy or in-place update
+        out = data.copy(empty=True) if not inplace else data
+        out.array = y
+        # metadata stays identical (nside, N0, dg, cell_ids, ...)
+        return out
