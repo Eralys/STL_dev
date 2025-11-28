@@ -280,101 +280,7 @@ class STL_2D_Kernel_Torch:
             new.array = self.array[key]
 
         return new
-  
-    @staticmethod
-    def _downsample_tensor(x: torch.Tensor, dg_inc: int) -> torch.Tensor:
-        """
-        Downsample a tensor by a factor 2**dg_inc along the last two
-        dimensions using 2x2 mean pooling (FoCUS ud_grade strategy).
-
-        Requires that both spatial dimensions be divisible by 2**dg_inc.
-        """
-        if dg_inc < 0:
-            raise ValueError("dg_inc must be non-negative")
-        if dg_inc == 0:
-            return x
-
-        scale = 2 ** dg_inc
-        H, W = x.shape[-2:]
-        if H % scale != 0 or W % scale != 0:
-            raise ValueError(
-                f"Cannot downsample from ({H},{W}) by 2^{dg_inc}: "
-                "dimensions must be divisible."
-            )
-
-    # Create Gaussian kernel for anti-aliasing
-        def get_gaussian_kernel(sigma=1.0, dtype=torch.float32):
-            """Create a 2D Gaussian kernel with kernel_size based on sigma"""
-            kernel_size = int(6 * sigma + 1)
-            if kernel_size % 2 == 0:
-                kernel_size += 1
-            
-            x_coord = torch.arange(kernel_size, dtype=dtype) - kernel_size // 2
-            gauss_1d = torch.exp(-x_coord**2 / (2 * sigma**2))
-            gauss_1d = gauss_1d / gauss_1d.sum()
-            gauss_2d = gauss_1d.unsqueeze(0) * gauss_1d.unsqueeze(1)
-            return gauss_2d.unsqueeze(0).unsqueeze(0), kernel_size
-
-        leading_dims = x.shape[:-2]
-        B = int(torch.prod(torch.tensor(leading_dims))) if leading_dims else 1
-        y = x.reshape(B, 1, H, W)
-
-        for _ in range(dg_inc):
-            h, w = y.shape[-2:]
-            if h % 2 != 0 or w % 2 != 0:
-                raise ValueError("Downsampling requires even spatial dimensions at each step.")
-            sigma = 1.0
-            kernel, kernel_size = get_gaussian_kernel(sigma, dtype=y.dtype)
-            kernel = kernel.to(y.device)
-            # Add circular padding for periodic boundaries
-            pad = kernel_size // 2
-            y_padded = F.pad(y, (pad, pad, pad, pad), mode='circular')
-            y = F.conv2d(y_padded, kernel)
-            # Now downsample with 2x2 mean pooling
-            y = F.avg_pool2d(y, kernel_size=2, stride=2)
-
-        H2, W2 = y.shape[-2:]
-        return y.reshape(*leading_dims, H2, W2)
-  
-    ###########################################################################
-    def downsample_toMR_Mask(self, dg_max):
-        '''
-        Take a mask given at a dg=0 resolution, and put it at all resolutions
-        from dg=0 to dg=dg_max, in a MR=True object.
-
-        Each resolution is normalized to have unit mean (over spatial dims).
-        '''
-        if self.MR:
-            raise ValueError("downsample_toMR_Mask expects MR == False.")
-        if self.dg != 0:
-            raise ValueError("Mask should be at dg=0 to build a multi-resolution mask.")
-        if self.array is None:
-            raise ValueError("No array stored in this object.")
-
-        list_masks = []
-        list_dg = list(range(dg_max + 1))
-
-        for dg in list_dg:
-            if dg == 0:
-                m = self.array
-            else:
-                m = self._downsample_tensor(self.array, dg)
-
-            if (m < 0).any():
-                raise ValueError("Mask contains negative values; expected non-negative weights.")
-
-            mean = m.mean(dim=(-2, -1), keepdim=True)
-            m = m / mean.clamp_min(1e-12)
-            list_masks.append(m)
-
-        Mask_MR = self.copy(empty=True)
-        Mask_MR.MR = True
-        Mask_MR.dg = None
-        Mask_MR.list_dg = list_dg
-        Mask_MR.array = list_masks
-
-        return Mask_MR
-
+    
     ###########################################################################
     def _get_mask_at_dg(self, mask_MR, dg):
         """Helper to pick the mask at a given dg from a MR mask object."""
@@ -389,135 +295,6 @@ class STL_2D_Kernel_Torch:
         except ValueError:
             raise ValueError(f"Mask does not contain dg={dg}.")
         return mask_MR.array[idx]
-
-    ###########################################################################
-    def downsample(self, dg_out, mask_MR=None, inplace=True):
-        """
-        Downsample the data to the dg_out resolution.
-        Only supports MR == False.
-
-        Downsampling is done in real space by average pooling, with factor
-        2^(dg_out - dg) on both spatial axes.
-        """
-        if self.MR:
-            raise ValueError("downsample only supports MR == False.")
-        if dg_out < 0:
-            raise ValueError("dg_out must be non-negative.")
-        if dg_out == self.dg and not copy:
-            return self
-        if dg_out < self.dg:
-            raise ValueError("Requested dg_out < current dg; upsampling not supported.")
-
-        data = self.copy(empty=False) if not inplace else self
-        dg_inc = dg_out - data.dg
-        if dg_inc > 0:
-            data.array = self._downsample_tensor(data.array, dg_inc)
-            data.dg = dg_out
-
-        # Optionally apply a mask at the target resolution (simple multiplicative mask)
-        if mask_MR is not None:
-            mask = self._get_mask_at_dg(mask_MR, data.dg)
-            if mask.shape[-2:] != data.array.shape[-2:]:
-                raise ValueError("Mask and data have incompatible spatial shapes.")
-            data.array = data.array * mask
-        return data
-    
-    ###########################################################################
-    def downsample_toMR(self, dg_max, mask_MR=None):
-        """
-        Generate a MR (multi-resolution) object by downsampling the current
-        (single-resolution) data to all resolutions between dg=0 and dg_max.
-
-        Only supports MR=False and assumes current dg==0.
-        """
-        if self.MR:
-            raise ValueError("downsample_toMR expects MR == False.")
-        if self.dg != 0:
-            raise ValueError("downsample_toMR assumes current data is at dg=0.")
-        if dg_max < 0:
-            raise ValueError("dg_max must be non-negative.")
-        if self.array is None:
-            raise ValueError("No array stored in this object.")
-
-        list_arrays = []
-        list_dg = list(range(dg_max + 1))
-
-        for dg in list_dg:
-            if dg == 0:
-                arr = self.array
-            else:
-                arr = self._downsample_tensor(self.array, dg)
-
-            if mask_MR is not None:
-                mask = self._get_mask_at_dg(mask_MR, dg)
-                if mask.shape[-2:] != arr.shape[-2:]:
-                    raise ValueError(f"Mask and data have incompatible shapes at dg={dg}.")
-                arr = arr * mask
-
-            list_arrays.append(arr)
-
-        data = self.copy(empty=True)
-        data.MR = True
-        data.dg = None
-        data.list_dg = list_dg
-        data.array = list_arrays
-
-        return data
-    
-    ###########################################################################
-    def downsample_fromMR(self, Nout):
-        """
-        Convert an MR==True object to MR==False at resolution Nout.
-
-        Each resolution in the current MR list is downsampled to Nout and then
-        stacked into a single array of shape (..., len(list_dg), *Nout).
-        """
-        if not self.MR:
-            raise ValueError("downsample_fromMR expects MR == True.")
-        if self.array is None or len(self.array) == 0:
-            raise ValueError("No data stored in this MR object.")
-        if not isinstance(Nout, (tuple, list)) or len(Nout) != 2:
-            raise ValueError("Nout must be a tuple (Nx_out, Ny_out).")
-
-        Nx_out, Ny_out = Nout
-        out_list = []
-
-        for arr in self.array:
-            H, W = arr.shape[-2:]
-            if (H, W) == (Nx_out, Ny_out):
-                y = arr
-            else:
-                if H % Nx_out != 0 or W % Ny_out != 0:
-                    raise ValueError(f"Cannot downsample from ({H},{W}) to ({Nx_out},{Ny_out}).")
-                factor_x = H // Nx_out
-                factor_y = W // Ny_out
-                if factor_x != factor_y:
-                    raise ValueError("Anisotropic downsampling is not supported in downsample_fromMR.")
-                dg_inc = int(round(math.log2(factor_x)))
-                if 2 ** dg_inc != factor_x:
-                    raise ValueError("Downsampling factor must be a power of 2.")
-                y = self._downsample_tensor(arr, dg_inc)
-            out_list.append(y)
-
-        # stack along a new dimension before spatial dims
-        stacked = torch.stack(out_list, dim=-3)
-
-        data = self.copy(empty=True)
-        data.MR = False
-        data.array = stacked
-
-        # infer dg from N0 and Nout if possible
-        if self.N0 is not None:
-            scale_x = self.N0[0] // Nx_out
-            if scale_x > 0 and 2 ** int(round(math.log2(scale_x))) == scale_x:
-                data.dg = int(round(math.log2(scale_x)))
-            else:
-                data.dg = None
-        else:
-            data.dg = None
-        data.list_dg = None
-
-        return data
     
     ###########################################################################
     def smooth(self, inplace=False):
@@ -638,7 +415,7 @@ class STL_2D_Kernel_Torch:
             else:
                 x_c = x
                 y_c = y
-            cov = (x_c * y_c.conj()).mean(dim=dims)
+            cov = (x_c * y_c.conj()).nanmean(dim=dims)
             
         return cov        
        
@@ -780,3 +557,91 @@ class WavelateOperator2Dkernel_torch:
         out.array = y
         # metadata stays identical (nside, N0, dg, cell_ids, ...)
         return out
+        
+    @staticmethod
+    def _downsample_tensor(x: torch.Tensor, dg_inc: int) -> torch.Tensor:
+        """
+        Downsample a tensor by a factor 2**dg_inc along the last two
+        dimensions using 2x2 mean pooling (FoCUS ud_grade strategy).
+
+        Requires that both spatial dimensions be divisible by 2**dg_inc.
+        """
+        if dg_inc < 0:
+            raise ValueError("dg_inc must be non-negative")
+        if dg_inc == 0:
+            return x
+
+        scale = 2 ** dg_inc
+        H, W = x.shape[-2:]
+        if H % scale != 0 or W % scale != 0:
+            raise ValueError(
+                f"Cannot downsample from ({H},{W}) by 2^{dg_inc}: "
+                "dimensions must be divisible."
+            )
+
+        # Create Gaussian kernel for anti-aliasing
+        def get_gaussian_kernel(sigma=1.0, dtype=torch.float32):
+            """Create a 2D Gaussian kernel with kernel_size based on sigma"""
+            kernel_size = int(6 * sigma + 1)
+            if kernel_size % 2 == 0:
+                kernel_size += 1
+            
+            x_coord = torch.arange(kernel_size, dtype=dtype) - kernel_size // 2
+            gauss_1d = torch.exp(-x_coord**2 / (2 * sigma**2))
+            gauss_1d = gauss_1d / gauss_1d.sum()
+            gauss_2d = gauss_1d.unsqueeze(0) * gauss_1d.unsqueeze(1)
+            return gauss_2d.unsqueeze(0).unsqueeze(0), kernel_size
+
+        leading_dims = x.shape[:-2]
+        B = int(torch.prod(torch.tensor(leading_dims))) if leading_dims else 1
+        y = x.reshape(B, 1, H, W)
+
+        for _ in range(dg_inc):
+            h, w = y.shape[-2:]
+            if h % 2 != 0 or w % 2 != 0:
+                raise ValueError("Downsampling requires even spatial dimensions at each step.")
+            sigma = 1.0
+            kernel, kernel_size = get_gaussian_kernel(sigma, dtype=y.dtype)
+            kernel = kernel.to(y.device)
+            # Add circular padding for periodic boundaries
+            pad = kernel_size // 2
+            y_padded = F.pad(y, (pad, pad, pad, pad), mode='circular')
+            y = F.conv2d(y_padded, kernel)
+            # Now downsample with 2x2 mean pooling
+            y = F.avg_pool2d(y, kernel_size=2, stride=2)
+
+        H2, W2 = y.shape[-2:]
+        return y.reshape(*leading_dims, H2, W2)
+  
+  
+    ###########################################################################
+    def downsample(self, data, dg_out, mask_MR=None, inplace=True):
+        """
+        Downsample the data to the dg_out resolution.
+        Only supports MR == False.
+
+        Downsampling is done in real space by average pooling, with factor
+        2^(dg_out - dg) on both spatial axes.
+        """
+        if data.MR:
+            raise ValueError("downsample only supports MR == False.")
+        if dg_out < 0:
+            raise ValueError("dg_out must be non-negative.")
+        if dg_out == data.dg and not copy:
+            return data
+        if dg_out < data.dg:
+            raise ValueError("Requested dg_out < current dg; upsampling not supported.")
+
+        data = data.copy(empty=False) if not inplace else data
+        dg_inc = dg_out - data.dg
+        if dg_inc > 0:
+            data.array = self._downsample_tensor(data.array, dg_inc)
+            data.dg = dg_out
+
+        # Optionally apply a mask at the target resolution (simple multiplicative mask)
+        if mask_MR is not None:
+            mask = self._get_mask_at_dg(mask_MR, data.dg)
+            if mask.shape[-2:] != data.array.shape[-2:]:
+                raise ValueError("Mask and data have incompatible spatial shapes.")
+            data.array = data.array * mask
+        return data
