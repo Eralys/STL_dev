@@ -18,13 +18,13 @@ class STL_2D_FFT_Torch:
         array = torch.as_tensor(data)
         return array
     
-    @staticmethod
-    def copy_array(data):
-        """
-        Copies input PyTorch array.
-        """
-        array = copy(data)
-        return array
+    # @staticmethod
+    # def copy_array(data):
+    #     """
+    #     Copies input PyTorch array.
+    #     """
+    #     array = copy(data)
+    #     return array
 
     @staticmethod    
     def cov(array1, fourier_status1, array2, fourier_status2, mask, remove_mean=False):

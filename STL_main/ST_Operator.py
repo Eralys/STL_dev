@@ -372,10 +372,11 @@ class ST_Operator:
             
             # Compute first convolution and modulus
             data_l1 = self.wavelet_op.apply(l_data,j3)                  #(Nb,Nc,L,N3)
-            data_l1m[j3] = data_l1.modulus(copy=True)                #(Nb,Nc,L,N3) 
+            data_l1m[j3] = data_l1.modulus(inplace=False)                #(Nb,Nc,L,N3) 
             
             
             # Compute S1 and S2
+            
             data_st.S1[:,:,j3,:] = data_l1m[j3].mean()                          #(Nb,Nc,J,L)
             data_st.S2[:,:,j3,:] = data_l1m[j3].mean(square=True)               #(Nb,Nc,J,L)
              
@@ -387,7 +388,7 @@ class ST_Operator:
                                  data_l1                                        #(Nb,Nc, 1,L3,N3)
                                  )        
                                  
-                data_l1m_l2m[j2] = data_l1m_l2.modulus(copy=True)                #(Nb,Nc,L,N3)
+                data_l1m_l2m[j2] = data_l1m_l2.modulus(inplace=False)                #(Nb,Nc,L,N3)
                 
                 for j1 in range(j2+1):
                     # S4(j1,j2,j3) = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
