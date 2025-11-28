@@ -765,7 +765,7 @@ class WavelateOperator2Dkernel_torch:
         x_bc = x.reshape(B, 1, K1,K2)
 
         # Smooth kernel (Ci=1, Co=1, P)
-        w_smooth = self.kernel.abs().to(device=data.device, dtype=data.dtype)
+        w_smooth = self.kernel.abs()[0,0:1].to(device=data.device, dtype=data.dtype)
 
         y_bc = _conv2d_circular(x, w_smooth)
         
