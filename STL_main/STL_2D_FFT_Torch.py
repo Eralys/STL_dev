@@ -9,7 +9,6 @@ class STL_2D_FFT_Torch:
     """
     Class for 2D planar STL FFT using PyTorch
     """
-<<<<<<< HEAD
     @staticmethod
     def to_array(data):
         """
@@ -17,8 +16,6 @@ class STL_2D_FFT_Torch:
         """
         array = torch.as_tensor(data)
         return array
-=======
->>>>>>> 66ad73b5bc95b1890437f875072321f02fa84938
     
     @staticmethod
     def copy_array(data):
@@ -29,11 +26,7 @@ class STL_2D_FFT_Torch:
         return array
 
     @staticmethod    
-<<<<<<< HEAD
     def covariance(array1, fourier_status1, array2, fourier_status2, mask, remove_mean=False):
-=======
-    def cov(array1, fourier_status1, array2, fourier_status2, mask = None, remove_mean=False):
->>>>>>> 66ad73b5bc95b1890437f875072321f02fa84938
         """
         Compute the covariance of two tensors on their last two dimensions.
         
