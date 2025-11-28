@@ -18,16 +18,16 @@ class STL_2D_FFT_Torch:
         array = torch.as_tensor(data)
         return array
     
-    # @staticmethod
-    # def copy_array(data):
-    #     """
-    #     Copies input PyTorch array.
-    #     """
-    #     array = copy(data)
-    #     return array
+    @staticmethod
+    def copy_array(data):
+        """
+        Copies input PyTorch array.
+        """
+        array = copy(data)
+        return array
 
     @staticmethod    
-    def cov(array1, fourier_status1, array2, fourier_status2, mask, remove_mean=False):
+    def cov(array1, fourier_status1, array2, fourier_status2, mask = None, remove_mean=False):
         """
         Compute the covariance of two tensors on their last two dimensions.
         
@@ -239,7 +239,7 @@ class STL_2D_FFT_Torch:
         else:
             return torch.fft.ifft2(self.array, norm="ortho")
 
-    def subsampling(self, dg_out, mask_MR=None):
+    def subsampling(self, dg_out, O_fourier = False, mask_MR=None):
         """
         Downsample the self.array to the specified resolution.
         
@@ -287,6 +287,7 @@ class STL_2D_FFT_Torch:
             # Fourier transform if in real space
             if not self.fourier_status:
                 array = self.fourier()
+                self.fourier_status = True
             else:
                 array = self.array
                         
@@ -297,13 +298,44 @@ class STL_2D_FFT_Torch:
                 torch.cat(
                     (array[...,:dx, -dy:], array[...,-dx:, -dy:]), -2)
                 ),-1) * np.sqrt(dx * dy / dx_cur / dy_cur)
-            return array_dg, True
             
+            self.array = array_dg
+            return self.out_fourier(O_fourier)
+
         else:
-            return self.array, self.fourier_status
+            return self.array
+        
+    def out_fourier(self, O_fourier):
+        """
+        Put the  in the desired Fourier status (O_Fourier).
+        
+        Parameters
+        ----------
+        - O_fourier : bool
+            Desired Fourier status (True = Fourier space, False = real space)
+        - copy : bool
+            If True, returns a new stl_array instance.
+        """
+        
+        # Check that O_Fourier is a bool
+        if not isinstance(O_fourier, bool):
+            raise Exception("0_Fourier should be a bool")
+    
+        # If current status differs from desired
+        if self.fourier_status != O_fourier:
+            if O_fourier:
+                data = self.fourier()
+            else:
+                data = self.ifourier()
+        # Already in desired space
+        else:
+            data = self.copy()
+    
+        return data
+    
         
 
-    def get_wavelet_op(self, J=None, L=4, WType="Crappy"):
+    def get_wavelet_op(self, L=4, J=None, WType="Crappy"):
     
         # Default values
         if J is None:
