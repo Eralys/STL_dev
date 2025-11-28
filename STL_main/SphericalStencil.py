@@ -357,7 +357,7 @@ class SphericalStencil:
         grid = (np.arange(self.KERNELSZ) - self.KERNELSZ // 2) / self.nside
         vec_np[:, 0] = np.tile(grid, self.KERNELSZ)
         vec_np[:, 1] = np.repeat(grid, self.KERNELSZ)
-        vec_np[:, 2] = 1.0 - np.sqrt(vec_np[:, 0]**2 + vec_np[:, 1]**2)
+        vec_np[:, 2] = np.sqrt(1.0 - vec_np[:, 0]**2 + vec_np[:, 1]**2)
         vec_t = torch.as_tensor(vec_np, device=self.device, dtype=self.dtype)     # (P,3)
 
         # --- rotation matrices for all targets & gauges: (K,G,3,3)

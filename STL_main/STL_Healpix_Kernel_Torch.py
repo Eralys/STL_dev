@@ -116,6 +116,44 @@ class STL_Healpix_Kernel_Torch:
                             0.082085  , 0.36787944, 0.60653066, 0.36787944, 0.082085  ,
                             0.01831564, 0.082085  , 0.13533528, 0.082085  , 0.01831564]).reshape(1,1,25))
         self.smooth_kernel = self.smooth_kernel/self.smooth_kernel.sum()
+        
+        # --- cache for SphericalStencil objects (one per resolution / kernel config) ---
+        # key: (dg, kernel_sz, n_gauges, gauge_type, nest)
+        self._stencil_cache = {}
+
+    ###########################################################################
+    def _get_stencil(self, kernel_sz: int, n_gauges: int = 1,
+                     gauge_type: str = "cosmo"):
+        """
+        Return a cached SphericalStencil for the current resolution (dg, nside)
+        and given kernel_sz / n_gauges / gauge_type.
+
+        If it doesn't exist yet, build it once and store in self._stencil_cache.
+        """
+        # Key identifies geometry: dg controls nside and Npix, and nest is important
+        key = (int(self.dg), int(kernel_sz), int(n_gauges), str(gauge_type), bool(self.nest))
+
+        stencil = self._stencil_cache.get(key, None)
+        if stencil is None:
+            # Build it once
+            cid_np = self.cell_ids.detach().cpu().numpy().astype(np.int64)
+            stencil = SphericalStencil(
+                nside=self.nside,
+                kernel_sz=kernel_sz,
+                nest=self.nest,
+                cell_ids=cid_np,
+                n_gauges=n_gauges,
+                gauge_type=gauge_type,
+                device=self.device,
+                dtype=self.dtype,
+            )
+            self._stencil_cache[key] = stencil
+        else:
+            # Rebind device/dtype if they've changed (geometry stays valid)
+            stencil.device = self.device
+            stencil.dtype = self.dtype
+
+        return stencil
 
     ###########################################################################
     @staticmethod
@@ -197,6 +235,7 @@ class STL_Healpix_Kernel_Torch:
         new.device = self.device
         new.dtype = self.dtype
         new.smooth_kernel = self.smooth_kernel
+        new._stencil_cache = self._stencil_cache
 
         # Copy data
         if empty:
@@ -332,17 +371,13 @@ class STL_Healpix_Kernel_Torch:
         cov = (x_c * y_c.conj()).mean(dim=dim)
         return cov
 
-        ###########################################################################
+    ###########################################################################
     def _smooth_inplace(self):
         """
         Smooth the data in-place using self.smooth_kernel and SphericalStencil.Convol_torch.
         Shape of the data is preserved.
-
-        This is equivalent to the smoothing part of the old _downsample_once,
-        but without any change of resolution.
         """
         kernel_sz = int(np.sqrt(self.smooth_kernel.shape[-1]))
-
         nside_in = self.nside
         cid_np = self.cell_ids.detach().cpu().numpy().astype(np.int64)
 
@@ -352,20 +387,10 @@ class STL_Healpix_Kernel_Torch:
             B = int(np.prod(leading))
         else:
             B = 1
-
         x_bc = x.reshape(B, 1, K)
 
-        # Build SphericalStencil with the current nside
-        stencil = SphericalStencil(
-            nside=nside_in,
-            kernel_sz=kernel_sz,
-            nest=self.nest,
-            cell_ids=cid_np,
-            n_gauges=1,
-            gauge_type='cosmo',
-            device=self.device,
-            dtype=self.dtype,
-        )
+        # --- Get or build a cached stencil for smoothing ---
+        stencil = self._get_stencil(kernel_sz=kernel_sz, n_gauges=1, gauge_type='cosmo')
 
         # Smooth via convolution on the sphere: (B,1,K) -> (B,1,K)
         w_smooth = self.smooth_kernel.to(device=self.device, dtype=self.dtype)
@@ -376,8 +401,8 @@ class STL_Healpix_Kernel_Torch:
 
         y = y_bc.reshape(*leading, K)
         self.array = y
-    
-        ###########################################################################
+
+    ###########################################################################
     def downsample(self, dg_out: int, inplace: bool = True, smooth: bool = True):
         """
         Downsample the data to a coarser dg_out level in one step, using NESTED
@@ -471,126 +496,6 @@ class STL_Healpix_Kernel_Torch:
         data.nside = data.N0[0] // (2 ** dg_out)
 
         return data
-    '''
-    ###########################################################################
-    def _downsample_once(self, max_poll=False):
-        """
-        Downsample by one step in nside using SphericalStencil.Down.
-
-        This is a single-level helper (dg -> dg+1).
-
-        Returns
-        -------
-        new_array : torch.Tensor
-            Downsampled data with pixel axis length K_out.
-        new_cell_ids : torch.LongTensor
-            Corresponding HEALPix pixel indices at the coarse resolution.
-        new_nside : int
-            New nside (typically nside // 2).
-        """
-        
-        kernel_sz = int(np.sqrt(self.smooth_kernel.shape[-1]))
-        
-        # Current geometry
-        nside_in = self.nside
-        cid_np = self.cell_ids.detach().cpu().numpy().astype(np.int64)
-
-        # Prepare input as (B, Ci, K)
-        x = self.array
-        *leading, K = x.shape
-        if leading:
-            B = int(np.prod(leading))
-        else:
-            B = 1
-
-        x_bc = x.reshape(B, 1, K)
-
-        # Build SphericalStencil with the current nside
-        stencil = SphericalStencil(
-            nside=nside_in,
-            kernel_sz=kernel_sz,
-            nest=self.nest,
-            cell_ids=cid_np,
-            n_gauges=1,
-            gauge_type='cosmo',
-            device=self.device,
-            dtype=self.dtype,
-        )
-
-        x_bc = stencil.Convol_torch(x_bc, self.smooth_kernel, cell_ids=cid_np, nside=nside_in)
-        
-        # Call Down: expect (B,1,K_out), ids_out
-        dim, cid_out = stencil.Down(x_bc, cell_ids=cid_np, nside=nside_in, max_poll=max_poll)
-
-        # dim: Torch tensor or maybe numpy; convert to torch if needed
-        if not isinstance(dim, torch.Tensor):
-            dim = torch.as_tensor(dim, device=self.device, dtype=self.dtype)
-        if isinstance(cid_out, torch.Tensor):
-            cid_out_t = cid_out.to(device=self.device, dtype=torch.long).view(-1)
-        else:
-            cid_out_t = torch.as_tensor(cid_out, device=self.device, dtype=torch.long).view(-1)
-
-        # New map shape (..., K_out)
-        _, _, K_out = dim.shape
-        new_array = dim.reshape(*leading, K_out)
-
-        # Guess new nside (assuming factor 4 in Npix -> factor 2 in nside)
-        Npix_in = 12 * nside_in ** 2
-        Npix_out = cid_out_t.numel()
-        # Protect against division by zero / weird cases
-        if Npix_out > 0:
-            nside_out = int(np.sqrt(Npix_out / 12.0) + 0.5)
-        else:
-            nside_out = max(nside_in // 2, 1)
-
-        return new_array.to(self.device), cid_out_t, nside_out
-
-    ###########################################################################
-    def downsample(self, dg_out, inplace=True):
-        """
-        Downsample the data to a coarser dg_out level using Healpix ud_grade_2.
-
-        The logic is:
-          dg_out >= dg
-          nside_out = N0 // 2**dg_out
-
-        Only supports MR == False.
-
-        Parameters
-        ----------
-        dg_out : int
-            Target downgrading level.
-        copy : bool
-            If True, return a new object, else modify in-place.
-
-        Returns
-        -------
-        STL_Healpix_Kernel_Torch
-            Data at the desired dg_out resolution.
-        """
-        if self.MR:
-            raise ValueError("downsample only supports MR == False.")
-        dg_out = int(dg_out)
-        if dg_out < 0:
-            raise ValueError("dg_out must be non-negative.")
-        if dg_out == self.dg and not copy:
-            return self
-        if dg_out < self.dg:
-            raise ValueError("Requested dg_out < current dg; upsampling not supported.")
-
-        data = self.copy(empty=False) if not inplace else self
-
-        # Number of single steps we need
-        dg_inc = dg_out - data.dg
-        for _ in range(dg_inc):
-            new_arr, new_cid, new_nside = data._downsample_once(max_poll=False)
-            data.array = new_arr
-            data.cell_ids = new_cid
-            data.nside = new_nside
-            data.dg += 1
-
-        return data
-    '''
     
     ###########################################################################
     def downsample_toMR(self, dg_max):
@@ -638,19 +543,6 @@ class STL_Healpix_Kernel_Torch:
     def get_wavelet_op(self, kernel_size=None, L=None, J=None):
         """
         Build a Healpix wavelet operator, analogous to get_wavelet_op() in STL2DKernel.
-
-        Parameters
-        ----------
-        kernel_size : int or None
-            Tangent-plane stencil size (odd), default 5.
-        L : int or None
-            Number of orientations, default 4.
-        J : int or None
-            Number of scales. If None, set from N0 (roughly log2(N0)-2).
-
-        Returns
-        -------
-        WavelateOperatorHealpixKernel_torch
         """
         if L is None:
             L = 4
@@ -659,27 +551,12 @@ class STL_Healpix_Kernel_Torch:
         if J is None:
             J = int(np.log2(self.N0))
 
-        # We build a SphericalStencil at the current nside & cell_ids
-        stencil = SphericalStencil(
-            nside=self.nside,
-            kernel_sz=kernel_size,
-            nest=self.nest,
-            cell_ids=self.cell_ids.detach().cpu().numpy(),
-            device=self.device,
-            dtype=self.dtype,
-            n_gauges=L,
-            gauge_type='cosmo'
-        )
-        stencil_smooth = SphericalStencil(
-            nside=self.nside,
-            kernel_sz=kernel_size,
-            nest=self.nest,
-            cell_ids=self.cell_ids.detach().cpu().numpy(),
-            device=self.device,
-            dtype=self.dtype,
-            n_gauges=1,
-            gauge_type='cosmo'
-        )
+        # Reuse cached stencils for this resolution / kernel
+        stencil = self._get_stencil(kernel_sz=kernel_size,
+                                    n_gauges=L, gauge_type='cosmo')
+        stencil_smooth = self._get_stencil(kernel_sz=kernel_size,
+                                           n_gauges=1, gauge_type='cosmo')
+
         return WavelateOperatorHealpixKernel_torch(
             stencil=stencil,
             stencil_smooth=stencil_smooth,
@@ -689,8 +566,7 @@ class STL_Healpix_Kernel_Torch:
             device=self.device,
             dtype=self.dtype,
         )
-
-
+        
 ###############################################################################
 class WavelateOperatorHealpixKernel_torch:
     """
