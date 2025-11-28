@@ -211,13 +211,14 @@ class ST_Operator:
                            mask_st=st_stat.mask_st
                            )
         
+                  
     ########################################
     def apply(self, data, 
               SC=None, jmin=None, jmax=None, dj=None,
               pbc=None, mask_MR=None, pass_mask=False,
               norm=None, S2_ref=None, iso=None, 
               angular_ft=None, scale_ft=None,
-              flatten=None, mask_st=None):
+              flatten=None, mask_st=None,use_NaN=False):
         '''
         Compute the Scattering Transform (ST) of data, which are either stored 
         in an instance of the ST statistics class, or returned as a flatten
@@ -390,9 +391,15 @@ class ST_Operator:
 
             if data_st.DT != '2D_FFT_Torch':
                 # Downsample at Nj3
-                self.wavelet_op.downsample(l_data,j3+1)                  #(Nb,Nc,j3+1,L,N3)
+                if use_NaN:
+                    self.wavelet_op.nandownsample(l_data,j3+1)                  #(Nb,Nc,j3+1,L,N3)
+                else:
+                    self.wavelet_op.downsample(l_data,j3+1)                  #(Nb,Nc,j3+1,L,N3)
                 for j2 in range(j3+1): 
-                    self.wavelet_op.downsample(data_l1m[j2],j3+1)                 #(Nb,Nc,j3+1,L,N3)
+                    if use_NaN:
+                        self.wavelet_op.nandownsample(data_l1m[j2],j3+1)                 #(Nb,Nc,j3+1,L,N3)
+                    else:
+                        self.wavelet_op.downsample(data_l1m[j2],j3+1)                 #(Nb,Nc,j3+1,L,N3)
                 
         ########################################
         # Additional transform/compression

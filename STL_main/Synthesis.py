@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.optim import LBFGS
-
+import numpy as np
 # Suppose:
 # - STLDataClass is your data wrapper class (e.g. STL2DKernel)
 # - st_op is an operator such that st_op.apply(DC).to_flatten()
@@ -45,13 +45,17 @@ def optimize_scattering_LBFGS(
     verbose=True,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_NaN = np.sum(np.isnan(target))>0
+    if use_NaN:
+        print('NaN detected in the target, the synthesis take it into account')
+        
     target = torch.as_tensor(target, device=device, dtype=torch.float32)
 
     # Reference scattering
     DC_target = STLDataClass(target)
     st_op = SO_class(DC_target)
     with torch.no_grad():
-        r = st_op.apply(DC_target,norm='store_ref').to_flatten()
+        r = st_op.apply(DC_target,norm='store_ref',use_NaN=use_NaN).to_flatten()
     r = r.detach()
     
     # Model with learnable u

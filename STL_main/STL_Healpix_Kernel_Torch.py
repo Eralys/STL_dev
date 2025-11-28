@@ -3,7 +3,7 @@
 """
 HEALPix kernel-based data class for STL.
 
-Analogue of STL2DKernel, but:
+Analogue of FSTL2DKernel, but:
   - data live on HEALPix pixels (..., Npix)
   - convolutions and downsampling are performed with SphericalStencil.
 
@@ -263,14 +263,14 @@ class STL_Healpix_Kernel_Torch:
             means = []
             for arr in self.array:
                 arr_use = torch.abs(arr) ** 2 if square else arr
-                means.append(arr_use.mean(dim=-1))
+                means.append(arr_use.nanmean(dim=-1))
             # Stack along a new last dimension corresponding to list_dg
             return torch.stack(means, dim=-1)
         else:
             if self.array is None:
                 raise ValueError("No data stored in this object.")
             arr_use = torch.abs(self.array) ** 2 if square else self.array
-            return arr_use.mean(dim=-1)
+            return arr_use.nanmean(dim=-1)
 
     ###########################################################################
     def cov(self, data2=None, remove_mean=False):
