@@ -9,7 +9,7 @@ class STL_2D_FFT_Torch:
     """
     Class for 2D planar STL FFT using PyTorch
     """
-
+<<<<<<< HEAD
     @staticmethod
     def to_array(data):
         """
@@ -17,6 +17,8 @@ class STL_2D_FFT_Torch:
         """
         array = torch.as_tensor(data)
         return array
+=======
+>>>>>>> 66ad73b5bc95b1890437f875072321f02fa84938
     
     @staticmethod
     def copy_array(data):
@@ -27,7 +29,11 @@ class STL_2D_FFT_Torch:
         return array
 
     @staticmethod    
+<<<<<<< HEAD
+    def covariance(array1, fourier_status1, array2, fourier_status2, mask, remove_mean=False):
+=======
     def cov(array1, fourier_status1, array2, fourier_status2, mask = None, remove_mean=False):
+>>>>>>> 66ad73b5bc95b1890437f875072321f02fa84938
         """
         Compute the covariance of two tensors on their last two dimensions.
         
@@ -69,7 +75,7 @@ class STL_2D_FFT_Torch:
         """
     
         if remove_mean:
-            raise Exception("Remove mean is yet not implemented.")
+            raise NotImplementedError("Remove mean is yet not implemented.")
         
         if mask is None and fourier_status1 and fourier_status2:
             # Compute covariance (complex values)
@@ -105,6 +111,18 @@ class STL_2D_FFT_Torch:
         self.MR = False
         self.dg = 0
         self.N0 = self.findN()
+    
+
+    def __getitem__(self, key):
+        """
+        To slice directly the array attribute. Produce a view of array, to 
+        match with usual practices, allowing to conveniently pass only part
+        of an instance.
+        """
+        new = self.copy(empty=False)
+        new.array = self.array[key]
+
+        return new
 
 
     def findN(self):
@@ -138,6 +156,43 @@ class STL_2D_FFT_Torch:
         
         return self.__class__(self.array if not empty else None, 
                               fourier_status=self.fourier_status)
+
+    # def copy(self, empty=False):
+    #     """
+    #     Copy a STL_2D_Kernel_Torch instance.
+    #     Array is put to None if empty==True.
+        
+    #     Parameters
+    #     ----------
+    #     - empty : bool
+    #         If True, set array to None.
+                    
+    #     Output 
+    #     ----------
+    #     - STL_2D_Kernel_Torch
+    #        copy of self
+    #     """
+    #     new = object.__new__(STL_2D_FFT_Torch)
+
+    #     # Copy metadata
+    #     new.DT = self.DT
+    #     new.MR = self.MR
+    #     new.N0 = self.N0
+    #     new.dg = self.dg
+    #     new.fourier_status = self.fourier_status
+
+    #     # Copy array
+    #     if empty:
+    #         new.array = None
+    #     else:
+    #         if self.MR:
+    #             new.array = [a.clone() if isinstance(a, torch.Tensor) else None
+    #                          for a in self.array]
+    #         else:
+    #             new.array = (self.array.clone()
+    #                          if isinstance(self.array, torch.Tensor) else None)
+
+    #     return new
     
 
     
@@ -186,18 +241,36 @@ class STL_2D_FFT_Torch:
         torch.Tensor
             Mean of input array on the last two dimensions.
         """
-        
-        # Define unit mask if no mask is given
-        mask = 1 if mask is None else mask 
-
-        if self.fourier_status is True:
-            raise Exception("Mean in Fourier space is yet not implemented.") 
+        if (self.fourier_status) and (mask is None):
+            if square==False:
+                return self.array[...,0,0]
+            else:
+                # Parseval identity
+                return torch.mean((self.array.abs())**2, dim=(-2, -1))
+            
         else: # Real space
+            # Define unit mask if no mask is given
+            mask = 1 if mask is None else mask 
             if square==False:
                 return torch.mean(self.array * mask, dim=(-2, -1))
             else:
                 return torch.mean((self.array.abs())**2 * mask, dim=(-2, -1)) 
     
+
+    def cov(self, data2=None, mask=None, remove_mean=False):
+        """
+        Compute the covariance between data1=self and data2 on the last two
+        dimensions (Nx, Ny).
+
+        Only works whitout mask.
+        """
+        return self.__class__.covariance(self.array, 
+                                  self.fourier_status, 
+                                  data2.array, 
+                                  data2.fourier_status, 
+                                  mask=mask, 
+                                  remove_mean=remove_mean)
+
    
     def fourier(self):
         """
@@ -337,7 +410,7 @@ class STL_2D_FFT_Torch:
         return data
         
 
-    def get_wavelet_op(self, L=4, J=None, WType="Crappy"):
+    def get_wavelet_op(self, J=None, L=4, WType="Crappy"):
     
         # Default values
         if J is None:
@@ -692,7 +765,7 @@ class CrappyWavelateOperator2D_FFT_torch:
         return conv, fourier_status
         
     ###########################################################################
-    def apply(self, data, MR=None, j=None, mask_MR=None, O_Fourier=None):
+    def apply(self, data, j=None, MR=None, mask_MR=None, O_Fourier=None):
                   
         '''
         Compute the Wavelet Transform (WT) of data.
