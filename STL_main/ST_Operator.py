@@ -349,21 +349,16 @@ class ST_Operator:
         ########################################
         # ST coefficients computation
         ########################################
-
-        # I give here 4 different ST computations, for illustration purpose.
-        # They are without npbc, masks, jmin, jmax, dj...
-        # We assume that scales increase with j.
-        # We only do a first convolution at all scales, without a MR framework.
-        
-        ### !! WARNING: simple code break here !! ###
-        # Should probably be segmented in subfunction.
-        
-        ########################################
-        ### Version vanilla ###
         
         # Vanilla version uses the following form for S3 and S4
         # S3 = Cov(|I*psi1|*psi2, I*psi2)
         # S4 = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
+        
+        # WARNING !! This is the version coded by JMD, that should be correct
+        # for all DataTypes
+        
+        # See at the bottom of this file for the previous versions developped 
+        # for FFT
         
         data_l1m={}
         l_data=data.copy()
@@ -449,5 +444,156 @@ class ST_Operator:
 
         
         return 1
+    
+    #########################################
+    def additional_ST_Computation(self):
+        """
+        
+        
+        
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        ########################################
+        # ST coefficients computation
+        ########################################
+
+        # These are the ST statistics computations that were first implemented
+        # by EA, and were debugged by IH and EG, but not cleaned.
+        
+        # I give here 4 different ST computations, for illustration purpose.
+        # They are without npbc, masks, jmin, jmax, dj...
+        # We assume that scales increase with j.
+        # We only do a first convolution at all scales, without a MR framework.
+        
+
+        # --- Compute first convolution and modulus ---
+        data_l1 = self.wavelet_op.apply(data)                    #(Nb,Nc,J,L,N)
+        data_l1m = data_l1.modulus_func(copy=True)                #(Nb,Nc,J,L,N) 
+        
+        # --- Compute S1 and S2 ---
+        data_st.S1 = data_l1m.mean_func()                          #(Nb,Nc,J,L)
+        data_st.S2 = data_l1m.mean_func(square=True)               #(Nb,Nc,J,L)
+        
+        ################################
+        ### Higher order computation ###
+        ################################
+
+        # --- Version vanilla ---
+        # Vanilla version uses the following form for S3 and S4
+        # S3 = Cov(|I*psi1|*psi2, I*psi2)
+        # S4 = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
+
+        for j3 in range(J):
+            # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
+            # data_l1.array = data_l1.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
+            # data_l1m.array = data_l1m.array[:,:,:j3+1]        #(Nb,Nc,j3+1,L,N)
+            data_l1_tmp = data_l1.copy()        #(Nb,Nc,j3+1,L,N)
+            data_l1m_tmp = data_l1m.copy()
+            data_l1_tmp.array = data_l1_tmp.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
+            data_l1m_tmp.array = data_l1m_tmp.array[:,:,:j3+1]
+
+            # Downsample at Nj3
+            data_l1_tmp.downsample(j3)                  #(Nb,Nc,j3+1,L,N3)
+            data_l1m_tmp.downsample(j3)                 #(Nb,Nc,j3+1,L,N3)
+            
+            # Compute |I*psi2|*psi3                      #(Nb,Nc,j3+1,L2,L3,N3)
+            data_l1m_l2 = self.wavelet_op.apply(data_l1m_tmp, j=j3) 
+
+            for j2 in range(j3+1):
+                # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
+                data_st.S3_1[:,:,j2,j3,:,:] = data_l1m_l2[:,:,j2].cov_func(data_l1_tmp[:,:,j3, None]) #(Nb,Nc,L2,L3,N3) x (Nb,Nc,1,L3,N3)
+        
+                for j1 in range(j2+1):
+                    # S4(j1,j2,j3) = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
+                    data_st.S4_1[:,:,j1,j2,j3,:,:,:] = data_l1m_l2[:,:,j1,:,None].cov_func(data_l1m_l2[:,:,j2,None,:]) #(Nb,Nc,L1, 1,L3,N3) x (Nb,Nc, 1,L2,L3,N3)
+
+                
+        # --- Version batchée ---
+
+        for j3 in range(J):
+            # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
+            # data_l1.array = data_l1.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
+            # data_l1m.array = data_l1m.array[:,:,:j3+1]        #(Nb,Nc,j3+1,L,N)
+            data_l1_tmp = data_l1.copy()    #(Nb,Nc,j3+1,L,N)
+            data_l1m_tmp = data_l1m.copy()
+            data_l1_tmp.array = data_l1_tmp.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
+            data_l1m_tmp.array = data_l1m_tmp.array[:,:,:j3+1]
+            
+            # Downsample at Nj3
+            # data_l1.downsample(j_to_dg[j3])                  #(Nb,Nc,j3+1,L,N3)
+            # data_l1m.downsample(j_to_dg[j3])                 #(Nb,Nc,j3+1,L,N3)
+            data_l1_tmp.downsample(j3)                  #(Nb,Nc,j3+1,L,N3)
+            data_l1m_tmp.downsample(j3)                 #(Nb,Nc,j3+1,L,N3) 
+
+            # Compute |I*psi2|*psi3                      #(Nb,Nc,j3+1,L2,L3,N3)
+            data_l1m_l2 = self.wavelet_op.apply(data_l1m_tmp, j=j3) 
+            
+            # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
+            data_st.S3_2[:,:,:j3+1,j3,:,:] = data_l1m_l2[:,:,:j3+1].cov_func(data_l1_tmp[:,:,j3,None,None]) # (Nb,Nc,j3+1,L2,L3,N3) x (Nb,Nc, 1, 1,L3,N3)
+                 
+            for j2 in range(j3+1):
+                # S4(j1,j2,j3) = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
+                data_st.S4_2[:,:,:j2+1,j2,j3,:,:,:] = data_l1m_l2[:,:,:j2+1,:,None].cov_func(data_l1m_l2[:,:,j2,None,None,:]) # (Nb,Nc,j2+1,L1, 1,L3,N3) x (Nb,Nc,   1, 1,L2,L3,N3)
+
+        
+        # ---  Version Sihao (adaptée) ---
+        # This version uses the following form for S3 and S4
+        # S3 = Cov(|I*psi1|, I*psi2)
+        # S4 = Cov(|I*psi1|, |I*psi2|*psi3)
+
+        for j3 in range(J):
+            # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
+            # data_l1m.array = data_l1m.array[:,:,:j3+1]          #(Nb,Nc,j3+1,L,N)
+            # # Downsample at Nj3
+            # data.downsample(j_to_dg[j3])                            #(Nb,Nc,N3)
+            # data_l1m.downsample(j_to_dg[j3])                 #(Nb,Nc,j3+1,L,N3)
+            data_tmp = data.copy()
+            data_l1m_tmp = data_l1m.copy()
+            data_l1m_tmp.array = data_l1m_tmp.array[:,:,:j3+1]
+            
+            # Downsample at Nj3
+            data_tmp.downsample(j3)
+            data_l1m_tmp.downsample(j3)                 #(Nb,Nc,j3+1,L,N3) 
+            
+            for j2 in range(j3+1):
+                # Compute |I*psi2|*psi3                       #(Nb,Nc,L2,L3,N3)
+                data_l1m_l2 = self.wavelet_op.apply(data_l1m_tmp[:,:,j2], j3) 
+                
+                # S3(j2,j3) = Cov(I, |I*psi2|*psi3) 
+                data_st.S3_3[:,:,j2,j3,:,:] = data_tmp[:,:,None,None].cov_func(data_l1m_l2) #(Nb,Nc, 1, 1,N3) x (Nb,Nc,L2,L3,N3)   
+                
+                for j1 in range(j2+1):
+                    # S4(j1,j2,j3) = Cov(|I*psi1|, |I*psi2|*psi3)
+                    data_st.S4_3[:,:,j1,j2,j3,:,:,:] = data_l1m_tmp[:,:,j1,:,None,None].cov_func(data_l1m_l2[:,:,None,:,:]) #(Nb,Nc,L1, 1, 1,N3) x (Nb,Nc, 1,L2,L3,N3)
+        
+        
+        # ---  Version Sihao (adaptée) + batchée ---
+
+        for j3 in range(J):
+            # Scale smaller-eq to j3 whose [I*psi| will be convolved at j3
+            data_tmp = data.copy()
+            data_l1m_tmp = data_l1m.copy()
+            data_l1m_tmp.array = data_l1m_tmp.array[:,:,:j3+1]
+            
+            # Downsample at Nj3
+            data_tmp.downsample(j3)
+            data_l1m_tmp.downsample(j3)                 #(Nb,Nc,j3+1,L,N3) 
+            
+            # Compute |I*psi2|*psi3                     #(Nb,Nc,:j3+1,L2,L3,N3)
+            data_l1m_l2 = self.wavelet_op.apply(data_l1m_tmp, j3) 
+                        
+            # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
+            data_st.S3_4[:,:,:j3+1,j3,:,:] = data_tmp[:,:,None,None,None].cov_func(data_l1m_l2[:,:,:j3+1]) # (Nb,Nc,   1, 1, 1,N3) x (Nb,Nc,j3+1,L2,L3,N3)
+                
+            for j2 in range(j3+1):
+                    # S4(j1,j2,j3) = Cov(|I*psi1|, |I*psi2|*psi3)
+                data_st.S4_4[:,:,:j2+1,j2,j3,:,:,:] = data_l1m_tmp[:,:,:j2+1,:,None,None].cov_func(data_l1m_l2[:,:,j2,None,None]) # (Nb,Nc,j2+1,L1  1, 1,N3) x (Nb,Nc,   1, 1,L2,L3,N3)
+                
+        
         
     
