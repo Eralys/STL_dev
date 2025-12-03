@@ -3,7 +3,7 @@
 """
 HEALPix kernel-based data class for STL.
 
-Analogue of STL2DKernel, but:
+Analogue of FSTL2DKernel, but:
   - data live on HEALPix pixels (..., Npix)
   - convolutions and downsampling are performed with SphericalStencil.
 
@@ -105,55 +105,6 @@ class STL_Healpix_Kernel_Torch:
 
         # Multi-resolution attributes
         self.list_dg = None
-        
-        #smooth kernel coded
-        # x,y=np.meshgrid(np.arange(5)-2,np.arange(5)-2)
-        # sigma=1.0
-        # np.exp(-(x**2+y**2)/(2*sigma**2))
-        self.smooth_kernel = torch.Tensor(np.array([0.01831564, 0.082085  , 0.13533528, 0.082085  , 0.01831564,
-                            0.082085  , 0.36787944, 0.60653066, 0.36787944, 0.082085  ,
-                            0.13533528, 0.60653066, 1.        , 0.60653066, 0.13533528,
-                            0.082085  , 0.36787944, 0.60653066, 0.36787944, 0.082085  ,
-                            0.01831564, 0.082085  , 0.13533528, 0.082085  , 0.01831564]).reshape(1,1,25))
-        self.smooth_kernel = self.smooth_kernel/self.smooth_kernel.sum()
-        
-        # --- cache for SphericalStencil objects (one per resolution / kernel config) ---
-        # key: (dg, kernel_sz, n_gauges, gauge_type, nest)
-        self._stencil_cache = {}
-
-    ###########################################################################
-    def _get_stencil(self, kernel_sz: int, n_gauges: int = 1,
-                     gauge_type: str = "cosmo"):
-        """
-        Return a cached SphericalStencil for the current resolution (dg, nside)
-        and given kernel_sz / n_gauges / gauge_type.
-
-        If it doesn't exist yet, build it once and store in self._stencil_cache.
-        """
-        # Key identifies geometry: dg controls nside and Npix, and nest is important
-        key = (int(self.dg), int(kernel_sz), int(n_gauges), str(gauge_type), bool(self.nest))
-
-        stencil = self._stencil_cache.get(key, None)
-        if stencil is None:
-            # Build it once
-            cid_np = self.cell_ids.detach().cpu().numpy().astype(np.int64)
-            stencil = SphericalStencil(
-                nside=self.nside,
-                kernel_sz=kernel_sz,
-                nest=self.nest,
-                cell_ids=cid_np,
-                n_gauges=n_gauges,
-                gauge_type=gauge_type,
-                device=self.device,
-                dtype=self.dtype,
-            )
-            self._stencil_cache[key] = stencil
-        else:
-            # Rebind device/dtype if they've changed (geometry stays valid)
-            stencil.device = self.device
-            stencil.dtype = self.dtype
-
-        return stencil
 
     ###########################################################################
     @staticmethod
@@ -234,8 +185,6 @@ class STL_Healpix_Kernel_Torch:
         new.list_dg = list(self.list_dg) if self.list_dg is not None else None
         new.device = self.device
         new.dtype = self.dtype
-        new.smooth_kernel = self.smooth_kernel
-        new._stencil_cache = self._stencil_cache
 
         # Copy data
         if empty:
@@ -314,14 +263,14 @@ class STL_Healpix_Kernel_Torch:
             means = []
             for arr in self.array:
                 arr_use = torch.abs(arr) ** 2 if square else arr
-                means.append(arr_use.mean(dim=-1))
+                means.append(arr_use.nanmean(dim=-1))
             # Stack along a new last dimension corresponding to list_dg
             return torch.stack(means, dim=-1)
         else:
             if self.array is None:
                 raise ValueError("No data stored in this object.")
             arr_use = torch.abs(self.array) ** 2 if square else self.array
-            return arr_use.mean(dim=-1)
+            return arr_use.nanmean(dim=-1)
 
     ###########################################################################
     def cov(self, data2=None, remove_mean=False):
@@ -368,176 +317,9 @@ class STL_Healpix_Kernel_Torch:
             x_c = x
             y_c = y
 
-        cov = (x_c * y_c.conj()).mean(dim=dim)
+        cov = (x_c * y_c.conj()).nanmean(dim=dim)
         return cov
 
-    ###########################################################################
-    def _smooth_inplace(self):
-        """
-        Smooth the data in-place using self.smooth_kernel and SphericalStencil.Convol_torch.
-        Shape of the data is preserved.
-        """
-        kernel_sz = int(np.sqrt(self.smooth_kernel.shape[-1]))
-        nside_in = self.nside
-        cid_np = self.cell_ids.detach().cpu().numpy().astype(np.int64)
-
-        x = self.array
-        *leading, K = x.shape
-        if leading:
-            B = int(np.prod(leading))
-        else:
-            B = 1
-        x_bc = x.reshape(B, 1, K)
-
-        # --- Get or build a cached stencil for smoothing ---
-        stencil = self._get_stencil(kernel_sz=kernel_sz, n_gauges=1, gauge_type='cosmo')
-
-        # Smooth via convolution on the sphere: (B,1,K) -> (B,1,K)
-        w_smooth = self.smooth_kernel.to(device=self.device, dtype=self.dtype)
-        y_bc = stencil.Convol_torch(x_bc, w_smooth, cell_ids=cid_np, nside=nside_in)
-
-        if not isinstance(y_bc, torch.Tensor):
-            y_bc = torch.as_tensor(y_bc, device=self.device, dtype=self.dtype)
-
-        y = y_bc.reshape(*leading, K)
-        self.array = y
-
-    ###########################################################################
-    def downsample(self, dg_out: int, inplace: bool = True, smooth: bool = True):
-        """
-        Downsample the data to a coarser dg_out level in one step, using NESTED
-        binning on HEALPix indices.
-
-        Logic:
-          - Optionally smooth the map at current resolution to remove small scales.
-          - Group pixels by their parent index in NESTED scheme:
-                parent_id = cell_id // 4**Δg
-            where Δg = dg_out - dg.
-          - For each parent pixel, average all children pixels' values.
-
-        Only supports MR == False.
-
-        Parameters
-        ----------
-        dg_out : int
-            Target downgrading level (dg_out >= self.dg >= 0).
-        inplace : bool
-            If True, modify the current object.
-            If False, return a new object and leave self unchanged.
-        smooth : bool
-            If True, apply smoothing before binning.
-
-        Returns
-        -------
-        STL_Healpix_Kernel_Torch
-            Data at the desired dg_out resolution.
-        """
-        if self.MR:
-            raise ValueError("downsample only supports MR == False.")
-
-        dg_out = int(dg_out)
-        if dg_out < 0:
-            raise ValueError("dg_out must be non-negative.")
-
-        if dg_out < self.dg:
-            raise ValueError("Requested dg_out < current dg; upsampling not supported.")
-
-        # Trivial case
-        if dg_out == self.dg:
-            return self if inplace else self.copy(empty=False)
-
-        # Work on a copy or in-place
-        data = self if inplace else self.copy(empty=False)
-
-        # 1) Smoothing step (optional)
-        if smooth:
-            data._smooth_inplace()
-
-        # 2) Binning in NESTED scheme
-        delta_g = dg_out - data.dg
-        factor_pix = 4 ** delta_g  # 4^Δg children per parent in NESTED
-
-        cid = data.cell_ids  # (K,)
-        # Parent indices in NESTED
-        parent_ids = cid // factor_pix  # (K,)
-
-        # We want to average data.array[..., K] over these parent_ids
-        x = data.array
-        *leading, K = x.shape
-        if leading:
-            B = int(np.prod(leading))
-        else:
-            B = 1
-
-        # Flatten leading dims into batch dimension: (B, K)
-        x_flat = x.reshape(B, K)
-
-        # Unique parent indices and inverse mapping
-        parent_unique, inv = torch.unique(parent_ids, return_inverse=True)
-        Kc = parent_unique.numel()  # number of coarse pixels
-
-        # Scatter-add sums into coarse bins
-        out = torch.zeros(B, Kc, device=x.device, dtype=x.dtype)
-        idx = inv.unsqueeze(0).expand(B, -1)  # (B, K)
-        out.scatter_add_(1, idx, x_flat)
-
-        # Compute counts per coarse pixel (non-zero by construction)
-        counts = torch.bincount(inv, minlength=Kc).to(x.dtype)  # (Kc,)
-        out = out / counts.unsqueeze(0)  # broadcast over batch
-
-        # Reshape back to original leading dims + coarse pixel axis
-        y = out.reshape(*leading, Kc)
-
-        # Update data object
-        data.array = y
-        data.cell_ids = parent_unique.to(device=data.device, dtype=torch.long)
-        data.dg = dg_out
-        # New nside from N0 and dg_out (conceptually underlying grid)
-        data.nside = data.N0[0] // (2 ** dg_out)
-
-        return data
-    
-    ###########################################################################
-    def downsample_toMR(self, dg_max):
-        """
-        Build a multi-resolution representation by downsampling level by level.
-
-        The object returned has:
-          - MR == True
-          - list_dg = [0, 1, ..., dg_max]
-          - array = [a_0, a_1, ..., a_dgmax]
-          - cell_ids = [cid_0, cid_1, ..., cid_dgmax]
-        """
-        if self.MR:
-            raise ValueError("downsample_toMR expects MR == False.")
-        if self.dg != 0:
-            raise ValueError("downsample_toMR assumes current data is at dg=0.")
-        if dg_max < 0:
-            raise ValueError("dg_max must be non-negative.")
-        if self.array is None:
-            raise ValueError("No data stored in this object.")
-
-        list_arrays = []
-        list_cids = []
-        list_dg = []
-
-        # Start from dg=0
-        tmp = self.copy(empty=False)
-
-        for dg in range(dg_max + 1):
-            if dg > 0:
-                tmp = tmp.downsample(dg, inplace=True)
-            list_arrays.append(tmp.array)
-            list_cids.append(tmp.cell_ids)
-            list_dg.append(dg)
-
-        data = self.copy(empty=True)
-        data.MR = True
-        data.array = list_arrays
-        data.cell_ids = list_cids
-        data.list_dg = list_dg
-        data.dg = None
-        return data
 
     ###########################################################################
     def get_wavelet_op(self, kernel_size=None, L=None, J=None):
@@ -551,16 +333,9 @@ class STL_Healpix_Kernel_Torch:
         if J is None:
             J = int(np.log2(self.N0))
 
-        # Reuse cached stencils for this resolution / kernel
-        stencil = self._get_stencil(kernel_sz=kernel_size,
-                                    n_gauges=L, gauge_type='cosmo')
-        stencil_smooth = self._get_stencil(kernel_sz=kernel_size,
-                                           n_gauges=1, gauge_type='cosmo')
-
         return WavelateOperatorHealpixKernel_torch(
-            stencil=stencil,
-            stencil_smooth=stencil_smooth,
             kernel_size=kernel_size,
+            nside=self.N0[0],
             L=L,
             J=J,
             device=self.device,
@@ -580,20 +355,28 @@ class WavelateOperatorHealpixKernel_torch:
     to WavelateOperator2Dkernel_torch in STL2DKernel.
     """
 
-    def __init__(self, stencil: SphericalStencil, stencil_smooth: SphericalStencil, kernel_size: int, L: int, J: int,
+    def __init__(self, kernel_size: int, nside: int, L: int, J: int,
                  device='cuda', dtype=torch.float):
-        self.stencil = stencil
-        self.stencil_smooth = stencil_smooth
+                     
+        # Reuse cached stencils for this resolution / kernel
         self.KERNELSZ = kernel_size
         self.L = L
         self.J = J
         self.device = torch.device(device)
         self.dtype = dtype
         self.WType = "HealpixWavelet"
+        self.nest = True
+        self.nside = nside
 
         # Build (1, L, P) kernel, where P=K^2
         kernel_2d = self._wavelet_kernel(kernel_size, L)  # (1, L, K, K)
         self.kernel = kernel_2d.reshape(1, 1, kernel_size * kernel_size)  # (Ci=1, Co=L, P)
+        #smooth kernel coded
+        # x,y=np.meshgrid(np.arange(5)-2,np.arange(5)-2)
+        # sigma=1.0
+        # np.exp(-(x**2+y**2)/(2*sigma**2))
+        self.smooth_kernel = self.kernel.abs().reshape(1,1,kernel_size,kernel_size)
+        self.smooth_kernel = self.smooth_kernel/self.smooth_kernel.sum()
 
     def _wavelet_kernel(self, kernel_size: int, n_orientation: int, sigma=1.0):
         """
@@ -622,12 +405,49 @@ class WavelateOperatorHealpixKernel_torch:
             torch.cos(angles_proj) * mother_kernel,
             torch.sin(angles_proj) * mother_kernel,
         )
+        # --- cache for SphericalStencil objects (one per resolution / kernel config) ---
+        # key: (dg, kernel_sz, n_gauges, gauge_type, nest)
+        self._stencil_cache = {}
 
         # Zero-mean and normalization per orientation
         kernel = kernel - torch.mean(kernel, dim=(1, 2), keepdim=True)
         kernel = kernel / torch.sum(kernel.abs(), dim=(1, 2), keepdim=True)
 
         return kernel.reshape(1, 1, kernel_size, kernel_size)
+
+    ###########################################################################
+    def _get_stencil(self, dg: int, cell_ids, kernel_sz: int, n_gauges: int = 1,
+                     gauge_type: str = "cosmo"):
+        """
+        Return a cached SphericalStencil for the current resolution (dg, nside)
+        and given kernel_sz / n_gauges / gauge_type.
+
+        If it doesn't exist yet, build it once and store in self._stencil_cache.
+        """
+        # Key identifies geometry: dg controls nside and Npix, and nest is important
+        key = (int(dg), int(kernel_sz), int(n_gauges), str(gauge_type), bool(self.nest))
+
+        stencil = self._stencil_cache.get(key, None)
+        if stencil is None:
+            # Build it once
+            cid_np = cell_ids.detach().cpu().numpy().astype(np.int64)
+            stencil = SphericalStencil(
+                nside=self.nside//(2**dg),
+                kernel_sz=kernel_sz,
+                nest=self.nest,
+                cell_ids=cid_np,
+                n_gauges=n_gauges,
+                gauge_type=gauge_type,
+                device=self.device,
+                dtype=self.dtype,
+            )
+            self._stencil_cache[key] = stencil
+        else:
+            # Rebind device/dtype if they've changed (geometry stays valid)
+            stencil.device = self.device
+            stencil.dtype = self.dtype
+
+        return stencil
 
     def get_L(self):
         return self.L
@@ -667,15 +487,17 @@ class WavelateOperatorHealpixKernel_torch:
         wr = torch.real(self.kernel).to(device=data.device, dtype=data.dtype)
         wi = torch.imag(self.kernel).to(device=data.device, dtype=data.dtype)
 
+        l_stencil = self._get_stencil(data.dg, cid,self.KERNELSZ, n_gauges=self.L)
+        
         # Use the same stencil but rebind device/dtype if needed
-        if (self.stencil.device != data.device) or (self.stencil.dtype != data.dtype):
+        if (l_stencil.device != data.device) or (l_stencil.dtype != data.dtype):
             # No heavy re-init: we just update device/dtype (geometry is cached in stencil)
-            self.stencil.device = data.device
-            self.stencil.dtype = data.dtype
+            l_stencil.device = data.device
+            l_stencil.dtype = data.dtype
 
         # Convolution on sphere -> (B, L, K)
-        y_bc = torch.complex(self.stencil.Convol_torch(x_bc, wr, cell_ids=cid.detach().cpu().numpy()),
-                            self.stencil.Convol_torch(x_bc, wi, cell_ids=cid.detach().cpu().numpy()))
+        y_bc = torch.complex(l_stencil.Convol_torch(x_bc, wr, cell_ids=cid.detach().cpu().numpy()),
+                            l_stencil.Convol_torch(x_bc, wi, cell_ids=cid.detach().cpu().numpy()))
         if not isinstance(y_bc, torch.Tensor):
             y_bc = torch.as_tensor(y_bc, device=data.device, dtype=data.dtype)
 
@@ -725,13 +547,14 @@ class WavelateOperatorHealpixKernel_torch:
         # Smooth kernel (Ci=1, Co=1, P)
         w_smooth = self.kernel.abs().to(device=data.device, dtype=data.dtype)
 
+        l_stencil = self._get_stencil(data.dg, cid,self.KERNELSZ, n_gauges=1)
         # Make sure stencil uses the right device/dtype
-        if (self.stencil_smooth.device != data.device) or (self.stencil_smooth.dtype != data.dtype):
-            self.stencil_smooth.device = data.device
-            self.stencil_smooth.dtype = data.dtype
+        if (l_stencil.device != data.device) or (l_stencil.dtype != data.dtype):
+            l_stencil.device = data.device
+            l_stencil.dtype = data.dtype
 
         # Convolution on sphere -> (B, 1, K)
-        y_bc = self.stencil_smooth.Convol_torch(
+        y_bc = l_stencil.Convol_torch(
             x_bc,
             w_smooth,
             cell_ids=cid.detach().cpu().numpy()
@@ -747,4 +570,284 @@ class WavelateOperatorHealpixKernel_torch:
         out.array = y
         # metadata stays identical (nside, N0, dg, cell_ids, ...)
         return out
+        
+    def _smooth_with_nan(self, data: STL_Healpix_Kernel_Torch, inplace: bool = True):
+        """
+        Smooth the data by convolving with a smooth kernel derived from the
+        wavelet kernel, handling NaNs:
 
+          - NaNs are treated as missing values.
+          - We convolve both the data (with NaNs replaced by 0) and a mask
+            of valid pixels.
+          - The result is num / w_sum, i.e. normalized by the sum of weights
+            of valid pixels (nan-aware smoothing).
+
+        Parameters
+        ----------
+        data : STL_Healpix_Kernel_Torch
+            Input Healpix data with array of shape [..., K] and cell_ids aligned.
+        inplace : bool
+            If True, modify `data` in-place. Otherwise, work on a copy.
+
+        Returns
+        -------
+        STL_Healpix_Kernel_Torch
+            Smoothed data object with same shape as input.
+        """
+        x = data.array           # [..., K]
+        cid = data.cell_ids
+        *leading, K = x.shape
+
+        # Work on a copy or not
+        out = data if inplace else data.copy(empty=False)
+
+        # Flatten leading dims into (B, 1, K)
+        if leading:
+            B = int(np.prod(leading))
+        else:
+            B = 1
+        x_bc = x.reshape(B, 1, K)   # (B, 1, K)
+
+        # Build mask of valid pixels (1 for valid, 0 for NaN)
+        mask_valid = ~torch.isnan(x_bc)          # (B,1,K) bool
+        mask_f = mask_valid.to(x_bc.dtype)       # float
+        # Replace NaN by 0 so they do not contribute
+        x_filled = torch.where(mask_valid, x_bc, torch.zeros_like(x_bc))
+
+        # Smooth kernel (Ci=1, Co=1, P)
+        # Here we take magnitude of the wavelet kernel and normalize it
+        w_smooth = self.kernel.abs().to(device=data.device, dtype=data.dtype)   # (1,1,P)
+        w_smooth = w_smooth / (w_smooth.sum(dim=-1, keepdim=True) + 1e-12)
+
+        stencil = self._get_stencil(data.dg, cid, self.KERNELSZ, n_gauges=1)
+        if (stencil.device != data.device) or (stencil.dtype != data.dtype):
+            stencil.device = data.device
+            stencil.dtype = data.dtype
+
+        cid_np = cid.detach().cpu().numpy().astype(np.int64)
+
+        # Convolution on sphere for data and mask
+        num = stencil.Convol_torch(x_filled, w_smooth, cell_ids=cid_np)   # (B,1,K)
+        w_sum = stencil.Convol_torch(mask_f,   w_smooth, cell_ids=cid_np) # (B,1,K)
+
+        if not isinstance(num, torch.Tensor):
+            num = torch.as_tensor(num, device=data.device, dtype=data.dtype)
+        if not isinstance(w_sum, torch.Tensor):
+            w_sum = torch.as_tensor(w_sum, device=data.device, dtype=data.dtype)
+
+        eps = 1e-8
+        y_bc = num / (w_sum + eps)               # (B,1,K)
+        y_bc = y_bc.reshape(*leading, K)         # [..., K]
+
+        # Pixels with no valid neighbors in the smoothing kernel -> NaN
+        no_valid = (w_sum <= 0).reshape(*leading, K)
+        y_bc = torch.where(no_valid, torch.full_like(y_bc, float("nan")), y_bc)
+
+        out.array = y_bc
+        return out
+
+    ###########################################################################
+    def downsample(self, data:STL_Healpix_Kernel_Torch ,dg_out: int, inplace: bool = True, smooth: bool = True):
+        """
+        Downsample the data to a coarser dg_out level in one step, using NESTED
+        binning on HEALPix indices.
+
+        Logic:
+          - Optionally smooth the map at current resolution to remove small scales.
+          - Group pixels by their parent index in NESTED scheme:
+                parent_id = cell_id // 4**Δg
+            where Δg = dg_out - dg.
+          - For each parent pixel, average all children pixels' values.
+
+        Only supports MR == False.
+
+        Parameters
+        ----------
+        dg_out : int
+            Target downgrading level (dg_out >= self.dg >= 0).
+        inplace : bool
+            If True, modify the current object.
+            If False, return a new object and leave self unchanged.
+        smooth : bool
+            If True, apply smoothing before binning.
+
+        Returns
+        -------
+        STL_Healpix_Kernel_Torch
+            Data at the desired dg_out resolution.
+        """
+        if data.MR:
+            raise ValueError("downsample only supports MR == False.")
+
+        dg_out = int(dg_out)
+        if dg_out < 0:
+            raise ValueError("dg_out must be non-negative.")
+
+        if dg_out < data.dg:
+            raise ValueError("Requested dg_out < current dg; upsampling not supported.")
+
+        # Trivial case
+        if dg_out == data.dg:
+            return data if inplace else data.copy(empty=False)
+
+        # Work on a copy or in-place
+        data = data if inplace else data.copy(empty=False)
+
+        # 1) Smoothing step (optional)
+        if smooth:
+            data=self.apply_smooth(data,inplace=True)
+
+        # 2) Binning in NESTED scheme
+        delta_g = dg_out - data.dg
+        factor_pix = 4 ** delta_g  # 4^Δg children per parent in NESTED
+
+        cid = data.cell_ids  # (K,)
+        # Parent indices in NESTED
+        parent_ids = cid // factor_pix  # (K,)
+
+        # We want to average data.array[..., K] over these parent_ids
+        x = data.array
+        *leading, K = x.shape
+        if leading:
+            B = int(np.prod(leading))
+        else:
+            B = 1
+
+        # Flatten leading dims into batch dimension: (B, K)
+        x_flat = x.reshape(B, K)
+
+        # Unique parent indices and inverse mapping
+        parent_unique, inv = torch.unique(parent_ids, return_inverse=True)
+        Kc = parent_unique.numel()  # number of coarse pixels
+
+        # Scatter-add sums into coarse bins
+        out = torch.zeros(B, Kc, device=x.device, dtype=x.dtype)
+        idx = inv.unsqueeze(0).expand(B, -1)  # (B, K)
+        out.scatter_add_(1, idx, x_flat)
+
+        # Compute counts per coarse pixel (non-zero by construction)
+        counts = torch.bincount(inv, minlength=Kc).to(x.dtype)  # (Kc,)
+        out = out / counts.unsqueeze(0)  # broadcast over batch
+
+        # Reshape back to original leading dims + coarse pixel axis
+        y = out.reshape(*leading, Kc)
+
+        # Update data object
+        data.array = y
+        data.cell_ids = parent_unique.to(device=data.device, dtype=torch.long)
+        data.dg = dg_out
+        # New nside from N0 and dg_out (conceptually underlying grid)
+        data.nside = data.N0[0] // (2 ** dg_out)
+
+        return data
+
+    ###########################################################################
+    def nandownsample(self, data: STL_Healpix_Kernel_Torch,
+                      dg_out: int,
+                      inplace: bool = True,
+                      smooth: bool = True):
+        """
+        Nan-aware downsampling of Healpix data to a coarser dg_out level,
+        using NESTED binning and nanmean:
+
+        Logic
+        -----
+        - Optionally smooth the map at current resolution with nan-aware
+          smoothing (see _smooth_with_nan) to remove small scales.
+        - Group pixels by their parent index in NESTED scheme:
+              parent_id = cell_id // 4**Δg
+          where Δg = dg_out - dg.
+        - For each parent pixel and each batch element, compute the nanmean
+          of children values:
+              sum(children_valid) / count(children_valid).
+
+        Only supports MR == False.
+
+        Parameters
+        ----------
+        data : STL_Healpix_Kernel_Torch
+            Input data at resolution dg.
+        dg_out : int
+            Target downgrading level (dg_out >= data.dg >= 0).
+        inplace : bool
+            If True, modify `data` in-place.
+            If False, return a new STL_Healpix_Kernel_Torch.
+        smooth : bool
+            If True, apply nan-aware smoothing before binning.
+
+        Returns
+        -------
+        STL_Healpix_Kernel_Torch
+            Data at the desired dg_out resolution.
+        """
+        if data.MR:
+            raise ValueError("nandownsample only supports MR == False.")
+
+        dg_out = int(dg_out)
+        if dg_out < 0:
+            raise ValueError("dg_out must be non-negative.")
+        if dg_out < data.dg:
+            raise ValueError("Requested dg_out < current dg; upsampling not supported.")
+
+        # Trivial case
+        if dg_out == data.dg:
+            return data if inplace else data.copy(empty=False)
+
+        # Work on a copy or in-place
+        data = data if inplace else data.copy(empty=False)
+
+        # 1) Optional nan-aware smoothing
+        if smooth:
+            data = self._smooth_with_nan(data, inplace=True)
+
+        # 2) Binning in NESTED scheme with nanmean
+        delta_g = dg_out - data.dg
+        factor_pix = 4 ** delta_g  # 4^Δg children per parent in NESTED
+
+        cid = data.cell_ids  # (K,)
+        parent_ids = cid // factor_pix  # (K,)
+
+        x = data.array  # [..., K]
+        *leading, K = x.shape
+        if leading:
+            B = int(np.prod(leading))
+        else:
+            B = 1
+
+        # Flatten leading dims into batch dimension: (B, K)
+        x_flat = x.reshape(B, K)
+
+        # Handle NaNs: build mask of valid children
+        mask_valid = ~torch.isnan(x_flat)
+        mask_f = mask_valid.to(x_flat.dtype)
+        x_filled = torch.where(mask_valid, x_flat, torch.zeros_like(x_flat))
+
+        # Unique parent indices and inverse mapping from children -> parent
+        parent_unique, inv = torch.unique(parent_ids, return_inverse=True)
+        Kc = parent_unique.numel()  # number of coarse pixels
+
+        # Scatter-add sums into coarse bins (per batch)
+        idx = inv.unsqueeze(0).expand(B, -1)  # (B, K)
+
+        out_sum = torch.zeros(B, Kc, device=x_flat.device, dtype=x_flat.dtype)
+        out_sum.scatter_add_(1, idx, x_filled)
+
+        out_count = torch.zeros(B, Kc, device=x_flat.device, dtype=x_flat.dtype)
+        out_count.scatter_add_(1, idx, mask_f)
+
+        eps = 1e-8
+        out = out_sum / (out_count + eps)  # nan-aware mean
+        # No valid child for some parent in a given batch → NaN
+        no_valid_parent = out_count <= 0
+        out = torch.where(no_valid_parent, torch.full_like(out, float("nan")), out)
+
+        # Reshape back to original leading dims + coarse pixel axis
+        y = out.reshape(*leading, Kc)
+
+        # Update data object
+        data.array = y
+        data.cell_ids = parent_unique.to(device=data.device, dtype=torch.long)
+        data.dg = dg_out
+        data.nside = data.N0[0] // (2 ** dg_out)
+
+        return data

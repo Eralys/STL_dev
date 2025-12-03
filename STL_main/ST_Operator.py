@@ -211,13 +211,14 @@ class ST_Operator:
                            mask_st=st_stat.mask_st
                            )
         
+                  
     ########################################
     def apply(self, data, 
               SC=None, jmin=None, jmax=None, dj=None,
               pbc=None, mask_MR=None, pass_mask=False,
               norm=None, S2_ref=None, iso=None, 
               angular_ft=None, scale_ft=None,
-              flatten=None, mask_st=None):
+              flatten=None, mask_st=None,use_NaN=False):
         '''
         Compute the Scattering Transform (ST) of data, which are either stored 
         in an instance of the ST statistics class, or returned as a flatten
@@ -363,11 +364,12 @@ class ST_Operator:
         data_l1m={}
         l_data=data.copy()
         ### Higher order computation ###
+        
         for j3 in range(J):
             # Compute first convolution and modulus
             data_l1 = self.wavelet_op.apply(l_data, j=j3)                  #(Nb,Nc,L,N3)
-            data_l1m[j3] = data_l1.modulus(inplace=False)                #(Nb,Nc,L,N3) 
             
+            data_l1m[j3] = data_l1.modulus(inplace=False)                #(Nb,Nc,L,N3)
             # Compute S1 and S2
             
             data_st.S1[:,:,j3,:] = data_l1m[j3].mean()                          #(Nb,Nc,J,L)
@@ -377,23 +379,27 @@ class ST_Operator:
             for j2 in range(j3+1): 
                 data_l1m_l2 = self.wavelet_op.apply(data_l1m[j2],j=j3) # (Nb,Nc,L2,L3,N3)
                 # S3(j2,j3) = Cov(|I*psi2|*psi3, I*psi3) 
-                data_st.S3[:,:,j2,j3,:,:] = data_l1m_l2[:,:,None].cov(          #(Nb,Nc, 1,L3,N3)
-                                 data_l1                                        #(Nb,Nc, 1,L3,N3)
-                                 )        
-                                 
+                data_st.S3[:,:,j2,j3,:,:] = data_l1m_l2.cov(data_l1[:,:,None])         #(Nb,Nc, L3,N3)
+                
                 data_l1m_l2m[j2] = data_l1m_l2.modulus(inplace=False)                #(Nb,Nc,L,N3)
                 
                 for j1 in range(j2+1):
                     # S4(j1,j2,j3) = Cov(|I*psi1|*psi3, |I*psi2|*psi3)
-                    data_st.S4[:,:,j1,j2,j3,:,:,:] = data_l1m_l2m[j1][:,:,None,:].cov(
+                    data_st.S4[:,:,j1,j2,j3,:,:,:] = data_l1m_l2m[j1][:,:,None].cov(
                             data_l1m_l2m[j2][:,:,:,None]
                             )         
 
             if data_st.DT != '2D_FFT_Torch':
                 # Downsample at Nj3
-                l_data.downsample(j3+1)                  #(Nb,Nc,j3+1,L,N3)
+                if use_NaN:
+                    self.wavelet_op.nandownsample(l_data,j3+1)                  #(Nb,Nc,j3+1,L,N3)
+                else:
+                    self.wavelet_op.downsample(l_data,j3+1)                  #(Nb,Nc,j3+1,L,N3)
                 for j2 in range(j3+1): 
-                    data_l1m[j2].downsample(j3+1)                 #(Nb,Nc,j3+1,L,N3)
+                    if use_NaN:
+                        self.wavelet_op.nandownsample(data_l1m[j2],j3+1)                 #(Nb,Nc,j3+1,L,N3)
+                    else:
+                        self.wavelet_op.downsample(data_l1m[j2],j3+1)                 #(Nb,Nc,j3+1,L,N3)
                 
         ########################################
         # Additional transform/compression

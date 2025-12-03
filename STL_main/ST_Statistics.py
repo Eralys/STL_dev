@@ -276,7 +276,7 @@ class ST_Statistics:
         return self
         
     ########################################
-    def to_flatten(self, mask_st=None):
+    def to_flatten(self, mask_st=None,mean_along_batch=False):
         '''
         Produce a 1d array that can be used for loss constructions.
         
@@ -294,7 +294,10 @@ class ST_Statistics:
         '''
         
         # Collect all S1,S2,S3,S4 into a list
-        stats = [self.S1, self.S2, self.S3, self.S4]
+        if mean_along_batch:
+            stats = [bk.mean(self.S1,0),bk.mean(self.S2,0), bk.mean(self.S3,0), bk.mean(self.S4,0)]
+        else:
+            stats = [self.S1, self.S2, self.S3, self.S4]
 
         # Flatten each, remove NaNs, concat
         flattened_list = []

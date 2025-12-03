@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.optim import LBFGS
-
+import numpy as np
 # Suppose:
 # - STLDataClass is your data wrapper class (e.g. STL2DKernel)
 # - st_op is an operator such that st_op.apply(DC).to_flatten()
@@ -23,14 +23,13 @@ class ScatteringMatchModel(nn.Module):
 
         # Learnable field u
         self.u = STLDataClass(torch.randn(init_shape, device=device, dtype=dtype))
-        w_op = self.u.get_wavelet_op()
-        self.u = nn.Parameter(w_op.apply_smooth(self.u,inplace=False).array)
+        self.u = nn.Parameter(st_op.wavelet_op.apply_smooth(self.u,inplace=False).array)
         
 
     def forward(self):
         DC_u = self.STLDataClass(self.u)
         st_u = self.st_op.apply(DC_u,norm='load_ref')
-        s_flat_u = st_u.to_flatten()
+        s_flat_u = st_u.to_flatten(mean_along_batch=True)
         return s_flat_u
 
 
@@ -39,26 +38,31 @@ def optimize_scattering_LBFGS(
     STLDataClass,
     SO_class,
     max_iter=100,
+    nbatch=1,
     lr=1.0,
     history_size=50,
     print_iter=10,
     verbose=True,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_NaN = np.sum(np.isnan(target))>0
+    if use_NaN:
+        print('NaN detected in the target, the synthesis takes it into account')
+        
     target = torch.as_tensor(target, device=device, dtype=torch.float32)
 
     # Reference scattering
     DC_target = STLDataClass(target)
     st_op = SO_class(DC_target)
     with torch.no_grad():
-        r = st_op.apply(DC_target,norm='store_ref').to_flatten()
+        r = st_op.apply(DC_target,norm='store_ref',use_NaN=use_NaN).to_flatten()
     r = r.detach()
-
+    
     # Model with learnable u
     model = ScatteringMatchModel(
         st_op=st_op,
         STLDataClass=STLDataClass,
-        init_shape=target.shape,
+        init_shape=(nbatch,1,*target.shape),
         device=device,
         dtype=target.dtype,
     )
@@ -94,5 +98,11 @@ def optimize_scattering_LBFGS(
     optimizer.step(closure)
 
     u_opt = model.u.detach()
+    
+    if nbatch==1:
+        u_opt=u_opt[0,0]
+    else:
+        u_opt=u_opt[:,0]
+        
     return u_opt, loss_history
 
